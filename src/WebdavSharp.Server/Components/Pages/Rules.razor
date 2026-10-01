@@ -1,0 +1,281 @@
+@page "/admin/rules"
+@attribute [Authorize]
+@inject IFreeSql Db
+@rendermode InteractiveServer
+
+<h2>访问规则</h2>
+<p class="muted">最后一条命中的规则生效。path 前缀匹配（尾 <code>/</code> 同时覆盖集合自身）；regex 对全路径字面匹配。</p>
+
+<div class="card">
+    <h3>新建规则</h3>
+
+    <div class="row">
+        <label>作用对象</label>
+        <select @bind="_target">
+            <option value="global">全局默认</option>
+            @foreach (var u in _users) { <option value="u:@u.Id">用户 @u.Username</option> }
+            @foreach (var r in _roles) { <option value="r:@r.Id">角色 @r.Name</option> }
+        </select>
+
+        <label>匹配方式</label>
+        <select @bind="_kind">
+            <option value="Path">path 前缀</option>
+            <option value="Regex">regex 正则</option>
+        </select>
+    </div>
+
+    <div class="row">
+        <label>排序</label>
+        <input @bind="_sort" style="width:80px;" />
+        <span class="muted">越大越后生效（最后命中者胜）。要覆盖已有规则，排序需大于它；当前最大为 <code>@MaxSort</code>。</span>
+    </div>
+
+    <div class="row">
+        <label>路径/正则</label>
+        <input placeholder="如 /NAS/剧集/ 或 ^.+\.js$" @bind="_pattern" style="min-width:340px;" />
+        @if (_kind == "Path")
+        {
+            <button @onclick="() => _picking = true">📂 浏览…（可多选）</button>
+        }
+    </div>
+
+    <div class="row">
+        <label>权限</label>
+        <label><input type="checkbox" @bind="_canCreate" /> C 创建</label>
+        <label><input type="checkbox" @bind="_canRead" /> R 读取</label>
+        <label><input type="checkbox" @bind="_canUpdate" /> U 更新</label>
+        <label><input type="checkbox" @bind="_canDelete" /> D 删除</label>
+        <label><input type="checkbox" @bind="_denyAll" /> 显式拒绝（none）</label>
+        <label><input type="checkbox" @bind="_hiddenExport" /> 全部（CRUD 一把勾）</label>
+        <span class="muted">当前：<code>@PermText</code></span>
+    </div>
+
+    <div class="row">
+        <label>适配协议</label>
+        <label><input type="checkbox" @bind="_protoWebDav" /> WebDAV</label>
+        <label><input type="checkbox" @bind="_protoSmb" /> SMB</label>
+        <label><input type="checkbox" @bind="_protoFtp" /> FTP</label>
+        <span class="muted">全不勾 = 适配所有协议；当前：<code>@ProtoText</code></span>
+    </div>
+
+    <div class="row">
+        <label class="muted"><input type="checkbox" @bind="_visible" /> 可见（取消勾选=不列出，但知道 URL 仍可访问）</label>
+        <input placeholder="备注（可选）" @bind="_note" style="min-width:220px;" />
+        <button class="btn-primary" @onclick="Create">创建</button>
+    </div>
+
+    @if (!string.IsNullOrEmpty(_msg)) { <p class="err">@_msg</p> }
+    @if (_preview.Count > 0)
+    {
+        <div class="picker-chosen">
+            <div class="muted" style="margin-bottom:4px;">
+                将按以下 @_preview.Count 条虚拟路径创建规则：
+                <button class="btn-sm" style="margin-left:8px;" @onclick="ClearPreview">清空（改用上方输入框）</button>
+            </div>
+            @foreach (var p in _preview) { <div>@p</div> }
+        </div>
+    }
+</div>
+
+<div class="card">
+    <table class="grid">
+        <thead><tr><th>目标</th><th>类型</th><th>模式</th><th>权限</th><th>协议</th><th>可见</th><th>排序</th><th>启用</th><th>备注</th><th>操作</th></tr></thead>
+        <tbody>
+        @foreach (var r in _rules)
+        {
+            <tr>
+                <td>@TargetName(r)</td>
+                <td>@r.Kind</td>
+                <td>@r.Pattern</td>
+                <td><code>@r.Permissions</code></td>
+                <td>@DavRuleScope.Describe(r.Protocols)</td>
+                <td>@(r.IsVisible ? "是" : "否")</td>
+                <td>@r.SortOrder</td>
+                <td>@(r.IsEnabled ? "是" : "否")</td>
+                <td>@r.Note</td>
+                <td>
+                    <button class="btn-sm" @onclick="() => Toggle(r.Id)">启用/禁用</button>
+                    <button class="btn-sm" @onclick="() => ToggleVisible(r.Id)">可见/隐藏</button>
+                    <button class="btn-sm btn-danger" @onclick="() => Delete(r.Id)">删除</button>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</div>
+
+<PathPicker Visible="_picking" Title="选择路径（可多选目录与文件）" MultiSelect="true"
+            InitialPath="@_pickStart"
+            OnConfirm="OnPicked" OnCancel="() => _picking = false" />
+
+@code {
+    private List<DavRule> _rules = [];
+    private List<DavUser> _users = [];
+    private List<DavRole> _roles = [];
+    private string _target = "global", _kind = "Path", _pattern = "", _sort = "2000", _msg = "", _note = "";
+    private bool _canRead = true, _canCreate, _canUpdate, _canDelete, _denyAll, _picking;
+    // 可见默认勾选（全勾选即全放开）；协议默认全不勾 = 适配所有
+    private bool _visible = true;
+    private bool _protoWebDav, _protoSmb, _protoFtp;
+    private string _pickStart = "";
+    private List<string> _preview = [];
+
+    /// <summary>「全部（CRUD 一把勾）」：勾上即 C/R/U/D 全开，取消则清空。</summary>
+    private bool _hiddenExport
+    {
+        get => _canCreate && _canRead && _canUpdate && _canDelete && !_denyAll;
+        set
+        {
+            _canCreate = _canRead = _canUpdate = _canDelete = value;
+            if (value) _denyAll = false;
+        }
+    }
+
+    private string ProtoText => DavRuleScope.Describe(ProtoValue);
+
+    private string ProtoValue
+    {
+        get
+        {
+            var list = new List<string>();
+            if (_protoWebDav) list.Add(DavProtocols.WebDav);
+            if (_protoSmb) list.Add(DavProtocols.Smb);
+            if (_protoFtp) list.Add(DavProtocols.Ftp);
+            return string.Join(',', list);
+        }
+    }
+
+    private int MaxSort => _rules.Count == 0 ? 0 : _rules.Max(r => r.SortOrder);
+
+    private string PermText    {
+        get
+        {
+            if (_denyAll) return "none";
+            var s = "";
+            if (_canCreate) s += "C";
+            if (_canRead) s += "R";
+            if (_canUpdate) s += "U";
+            if (_canDelete) s += "D";
+            return s.Length == 0 ? "none" : s;
+        }
+    }
+
+    protected override Task OnInitializedAsync() { Reload(); return Task.CompletedTask; }
+
+    private void Reload()
+    {
+        _users = Db.Select<DavUser>().OrderBy(u => u.Username).ToList();
+        _roles = Db.Select<DavRole>().OrderBy(r => r.Name).ToList();
+        _rules = Db.Select<DavRule>().OrderBy(r => r.SortOrder).ToList();
+    }
+
+    private string TargetName(DavRule r)
+    {
+        if (r.UserId is not null) return "用户 " + (_users.FirstOrDefault(u => u.Id == r.UserId)?.Username ?? "?");
+        if (r.RoleId is not null) return "角色 " + (_roles.FirstOrDefault(x => x.Id == r.RoleId)?.Name ?? "?");
+        return "全局";
+    }
+
+    /// <summary>把「浏览」选中的服务端物理路径映射为虚拟路径（供规则 pattern 使用）。</summary>
+    private void OnPicked(List<string> paths)
+    {
+        _picking = false;
+        _msg = "";
+        _preview.Clear();
+
+        var mounts = Db.Select<DavMount>().Where(m => m.IsEnabled).OrderBy(m => m.SortOrder).ToList();
+        var fails = new List<string>();
+        foreach (var p in paths)
+        {
+            var isDir = Directory.Exists(p);
+            var mapped = isDir
+                ? DavVirtualPathMapper.MapDirectory(p, mounts)
+                : DavVirtualPathMapper.MapFile(p, mounts);
+            if (mapped.Ok)
+                _preview.Add(mapped.VirtualPath);
+            else
+                fails.Add($"{p} → {mapped.Reason}");
+        }
+
+        _preview = _preview.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+
+        // 单条时直接填入输入框；多条时留在预览区，点创建批量建规则
+        if (_preview.Count == 1)
+            _pattern = _preview[0];
+
+        if (fails.Count > 0)
+            _msg = "部分路径无法映射：" + string.Join("；", fails.Take(3))
+                + (fails.Count > 3 ? $"（共 {fails.Count} 条）" : "");
+    }
+
+    private void ClearPreview()
+    {
+        _preview.Clear();
+        _msg = "";
+    }
+
+    private void Create()
+    {
+        _msg = "";
+        // 多选预览优先：批量建规则
+        var patterns = _preview.Count > 0 ? _preview : [(_pattern ?? "").Trim()];
+        patterns = patterns.Where(p => !string.IsNullOrWhiteSpace(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (patterns.Count == 0) { _msg = "路径必填（可点「浏览…」选择）。"; return; }
+
+        if (_kind == "Regex")
+        {
+            foreach (var p in patterns)
+            {
+                try { _ = new System.Text.RegularExpressions.Regex(p); }
+                catch (Exception ex) { _msg = $"正则非法：{ex.Message}"; return; }
+            }
+        }
+        int.TryParse(_sort, out var sort);
+
+        Guid? userId = null, roleId = null;
+        if (_target.StartsWith("u:") && Guid.TryParse(_target[2..], out var uid)) userId = uid;
+        else if (_target.StartsWith("r:") && Guid.TryParse(_target[2..], out var rid)) roleId = rid;
+
+        foreach (var p in patterns)
+        {
+            Db.Insert(new DavRule
+            {
+                UserId = userId,
+                RoleId = roleId,
+                Kind = _kind == "Regex" ? DavRuleKind.Regex : DavRuleKind.Path,
+                Pattern = p,
+                Permissions = PermText,
+                Protocols = DavRuleScope.Normalize(ProtoValue),
+                SortOrder = sort,
+                IsVisible = _visible,
+                Note = _note.Trim(),
+            }).ExecuteAffrows();
+        }
+
+        _pattern = ""; _preview.Clear(); _note = ""; _sort = "2000";
+        Reload();
+    }
+
+    private void Toggle(Guid id)
+    {
+        var r = Db.Select<DavRule>().Where(x => x.Id == id).First();
+        if (r is null) return;
+        Db.Update<DavRule>().Set(x => x.IsEnabled, !r.IsEnabled).Where(x => x.Id == id).ExecuteAffrows();
+        Reload();
+    }
+
+    private void ToggleVisible(Guid id)
+    {
+        var r = Db.Select<DavRule>().Where(x => x.Id == id).First();
+        if (r is null) return;
+        Db.Update<DavRule>().Set(x => x.IsVisible, !r.IsVisible).Where(x => x.Id == id).ExecuteAffrows();
+        Reload();
+    }
+
+    private void Delete(Guid id)
+    {
+        Db.Delete<DavRule>().Where(x => x.Id == id).ExecuteAffrows();
+        Reload();
+    }
+}

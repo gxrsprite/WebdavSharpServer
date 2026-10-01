@@ -1,0 +1,36 @@
+@page "/admin/login"
+@layout Layout.EmptyLayout
+
+<div class="login-wrap">
+    <div class="login-card">
+        <h1>WebdavSharp</h1>
+        <p class="sub">管理后台登录</p>
+
+        @if (Error == "1")
+        {
+            <div class="alert-error">用户名或密码错误，请重试。</div>
+        }
+
+        <form method="post" action="/api/admin/login">
+            <label>
+                用户名
+                <input name="username" autocomplete="username" autofocus />
+            </label>
+            <label>
+                密码
+                <input name="password" type="password" autocomplete="current-password" />
+            </label>
+            <button type="submit" class="btn-primary">登 录</button>
+        </form>
+
+        <div class="login-hint">
+            默认账号 admin / admin（首次运行种子）。<br />
+            WebDAV 客户端用同一账号走 HTTP Basic 访问 <code>/dav/</code>。
+        </div>
+    </div>
+</div>
+
+@code {
+    [SupplyParameterFromQuery]
+    public string? Error { get; set; }
+}

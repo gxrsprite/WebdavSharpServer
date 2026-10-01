@@ -1,0 +1,32 @@
+# .NET .gitignore (standalone repo)
+# Build outputs
+bin/
+obj/
+out/
+publish/
+artifacts/
+TestResults/
+*.user
+*.suo
+.vs/
+*.zip
+
+# Local dev data (never commit real file roots / DB / logs)
+LocalPaths/
+localpaths/
+Localpaths/
+data-dev/
+dav-root/
+*.db
+*.db-shm
+*.db-wal
+*.log
+appsettings.local.json
+appsettings.Production.json
+
+# Playwright / debug session temp
+.playwright-cli/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db

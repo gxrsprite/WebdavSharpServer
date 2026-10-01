@@ -1,0 +1,71 @@
+@page "/admin/audit"
+@attribute [Authorize]
+@inject IFreeSql Db
+@rendermode InteractiveServer
+
+<h2>审计日志</h2>
+<p class="muted">变更操作全记；读操作只记失败（401/403/409/412/423/5xx）。时间 UTC，倒序 200 条。</p>
+
+<div class="card">
+    <div class="row">
+        <input placeholder="用户名过滤" @bind="_username" />
+        <input placeholder="动词过滤（如 DELETE）" @bind="_method" />
+        <select @bind="_onlyFailures">
+            <option value="True">仅失败</option>
+            <option value="False">全部</option>
+        </select>
+        <button @onclick="Reload">查询</button>
+    </div>
+    <div class="row">
+        <input placeholder="保留天数" @bind="_retainDays" style="width:100px;" />
+        <button @onclick="Purge">清理更早记录</button>
+        @if (!string.IsNullOrEmpty(_msg)) { <span>@_msg</span> }
+    </div>
+</div>
+
+<div class="card">
+    <table class="grid">
+        <thead><tr><th>时间(UTC)</th><th>用户</th><th>动词</th><th>路径</th><th>目标</th><th>状态</th></tr></thead>
+        <tbody>
+        @foreach (var l in _logs)
+        {
+            <tr>
+                <td>@l.Time.ToString("yyyy-MM-dd HH:mm:ss")</td>
+                <td>@l.Username</td>
+                <td>@l.Method</td>
+                <td>@l.VirtualPath</td>
+                <td>@l.Destination</td>
+                <td>@l.StatusCode</td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    private List<DavAuditLog> _logs = [];
+    private string _username = "", _method = "", _onlyFailures = "True", _retainDays = "90", _msg = "";
+
+    protected override Task OnInitializedAsync() { Reload(); return Task.CompletedTask; }
+
+    private void Reload()
+    {
+        var q = Db.Select<DavAuditLog>();
+        if (!string.IsNullOrWhiteSpace(_username))
+            q = q.Where(l => l.Username.Contains(_username.Trim()));
+        if (!string.IsNullOrWhiteSpace(_method))
+            q = q.Where(l => l.Method == _method.Trim().ToUpper());
+        if (_onlyFailures == "True")
+            q = q.Where(l => l.StatusCode >= 400);
+        _logs = q.OrderByDescending(l => l.Time).Limit(200).ToList();
+    }
+
+    private void Purge()
+    {
+        if (!int.TryParse(_retainDays, out var days) || days < 1) { _msg = "保留天数非法。"; return; }
+        var cutoff = DateTime.UtcNow.AddDays(-days);
+        var n = Db.Delete<DavAuditLog>().Where(l => l.Time < cutoff).ExecuteAffrows();
+        _msg = $"已清理 {n} 条。";
+        Reload();
+    }
+}

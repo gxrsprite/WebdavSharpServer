@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net20;net40;netstandard2.0</TargetFrameworks>
+    <AssemblyName>SMBLibrary.Adapters</AssemblyName>
+    <Version>1.5.7</Version>
+    <NoWarn>1573;1591</NoWarn>
+    <RootNamespace>SMBLibrary.Adapters</RootNamespace>
+    <Authors>Tal Aloni</Authors>
+    <Copyright>Copyright © Tal Aloni 2014-2026</Copyright>
+    <PackageDescription>FileSystem adapters for SMBLibrary</PackageDescription>
+    <PackageLicenseExpression>LGPL-3.0-or-later</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/TalAloni/SMBLibrary</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/TalAloni/SMBLibrary</RepositoryUrl>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SMBLibrary\SMBLibrary.csproj" />
+  </ItemGroup>
+  
+  <ItemGroup>
+    <PackageReference Include="DiskAccessLibrary" Version="1.6.6" />
+  </ItemGroup>
+
+</Project>

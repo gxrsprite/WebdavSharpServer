@@ -1,0 +1,118 @@
+@page "/admin/services"
+@attribute [Authorize]
+@using WebdavSharp.Core.Entities
+@using WebdavSharp.Core.Services
+@inject DavServiceSettings Settings
+@inject WebdavSharp.Server.Ftp.DavFtpHostedService Ftp
+@inject WebdavSharp.Server.Smb.DavSmbHostedService Smb
+@rendermode InteractiveServer
+
+<h2>服务管理</h2>
+<p class="muted">
+    每个协议独立启停、独立配监听 IP/端口。这里的值存在数据库（<code>dav_service</code> 表）里，
+    配置文件（<code>Dav:*</code>）只提供<strong>首次启动的初始值</strong>，之后改配置重启也不会覆盖这里。
+</p>
+
+@foreach (var p in _order)
+{
+    var row = _rows.GetValueOrDefault(p);
+    if (row is null) { continue; }
+    var running = IsRunning(p, row);
+    <div class="card">
+        <h3>@Names[p] — @(running ? "运行中" : "已停止")</h3>
+        <div class="row">
+            <label class="muted"><input type="checkbox" @bind="row.Enabled" /> 启用</label>
+            <input placeholder="监听 IP（留空=跟随主地址）" @bind="row.Address" style="min-width:220px;" />
+            <input placeholder="端口" @bind="row.PortText" style="width:90px;" />
+            <button class="btn-primary" @onclick="() => Save(p)">保存</button>
+            @if (p != DavProtocols.WebDav)
+            {
+                <button class="btn-sm" @onclick="@(() => Control(p, "start"))">启动</button>
+                <button class="btn-sm" @onclick="@(() => Control(p, "stop"))">停止</button>
+                <button class="btn-sm" @onclick="@(() => Control(p, "restart"))">重启</button>
+            }
+        </div>
+        @if (p == DavProtocols.WebDav)
+        {
+            <p class="muted">WebDAV 就是本站自身：开关即时生效；IP/端口是 Kestrel 绑定，改完需<strong>重启应用</strong>。关掉它不会锁死后台（/admin 与健康探针照常）。</p>
+        }
+        else
+        {
+            <p class="muted">保存只写库；要点<strong>重启</strong>才按新 IP/端口重新监听（重启也会重建共享/重读挂载）。Linux 上 1024 以下端口需 root。</p>
+        }
+        @if (!string.IsNullOrEmpty(_msgs.GetValueOrDefault(p))) { <p class="@(_ok.GetValueOrDefault(p) ? "ok" : "err")">@_msgs[p]</p> }
+    </div>
+}
+
+@code {
+    private static readonly string[] _order = [DavProtocols.WebDav, DavProtocols.Ftp, DavProtocols.Smb];
+    private static readonly Dictionary<string, string> Names = new()
+    {
+        [DavProtocols.WebDav] = "WebDAV",
+        [DavProtocols.Ftp] = "FTP",
+        [DavProtocols.Smb] = "SMB",
+    };
+
+    private sealed class EditRow
+    {
+        public bool Enabled;
+        public string Address = "";
+        public string PortText = "";
+    }
+
+    private readonly Dictionary<string, EditRow> _rows = new();
+    private readonly Dictionary<string, string> _msgs = new();
+    private readonly Dictionary<string, bool> _ok = new();
+
+    protected override async Task OnInitializedAsync() => await Reload();
+
+    private async Task Reload()
+    {
+        _rows.Clear();
+        foreach (var s in await Settings.GetAllAsync())
+            _rows[s.Protocol] = new EditRow { Enabled = s.IsEnabled, Address = s.Address, PortText = s.Port.ToString() };
+    }
+
+    private bool IsRunning(string protocol, EditRow row) => protocol switch
+    {
+        var x when x == DavProtocols.Ftp => Ftp.IsRunning,
+        var x when x == DavProtocols.Smb => Smb.IsRunning,
+        _ => row.Enabled, // WebDAV：宿主在跑，开关即实际状态
+    };
+
+    private async Task Save(string protocol)
+    {
+        var row = _rows[protocol];
+        if (!int.TryParse(row.PortText?.Trim(), out var port))
+        {
+            _msgs[protocol] = "端口必须是数字";
+            _ok[protocol] = false;
+            return;
+        }
+        var (ok, error) = await Settings.SetAsync(protocol, row.Enabled, row.Address, port);
+        _msgs[protocol] = ok
+            ? (protocol == DavProtocols.WebDav && row.Enabled
+                ? "已保存（WebDAV 开关即时生效；IP/端口改动需重启应用）"
+                : "已保存（FTP/SMB 请点“重启”使 IP/端口生效）")
+            : error ?? "保存失败";
+        _ok[protocol] = ok;
+        StateHasChanged();
+    }
+
+    private async Task Control(string protocol, string action)
+    {
+        (bool ok, string message) = action switch
+        {
+            "start" when protocol == DavProtocols.Ftp => await Ftp.StartNowAsync(),
+            "stop" when protocol == DavProtocols.Ftp => await Ftp.StopNowAsync(),
+            "restart" when protocol == DavProtocols.Ftp => await Ftp.RestartAsync(),
+            "start" when protocol == DavProtocols.Smb => await Smb.StartNowAsync(),
+            "stop" when protocol == DavProtocols.Smb => await Smb.StopNowAsync(),
+            "restart" when protocol == DavProtocols.Smb => await Smb.RestartAsync(),
+            _ => (false, "未知操作"),
+        };
+        _msgs[protocol] = message;
+        _ok[protocol] = ok;
+        StateHasChanged();
+    }
+}

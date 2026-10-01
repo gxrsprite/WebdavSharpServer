@@ -1,0 +1,5 @@
+<Project>
+  <!-- WebdavSharp: 屏蔽仓库根 Directory.Build.props（net10.0 等全局设置），
+       让上游 SMBLibrary/Utilities 按自身 csproj（net20;net40;netstandard2.0）构建。
+       上游源码保持原样，仅允许本目录 README 中记录的补丁文件存在差异。 -->
+</Project>

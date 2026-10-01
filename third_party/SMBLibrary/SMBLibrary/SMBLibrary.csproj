@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net20;net40;netstandard2.0</TargetFrameworks>
+    <AssemblyName>SMBLibrary</AssemblyName>
+    <Version>1.5.7</Version>
+    <NoWarn>1573;1591</NoWarn>
+    <RootNamespace>SMBLibrary</RootNamespace>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <Authors>Tal Aloni</Authors>
+    <Copyright>Copyright © Tal Aloni 2014-2026</Copyright>
+    <PackageDescription>SMBLibrary is an open-source C# SMB 1.0/CIFS, SMB 2.0, SMB 2.1 and SMB 3.0 server and client implementation</PackageDescription>
+    <PackageLicenseExpression>LGPL-3.0-or-later</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/TalAloni/SMBLibrary</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/TalAloni/SMBLibrary</RepositoryUrl>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Utilities\Utilities.csproj" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <PackageReference Include="System.Buffers">
+      <Version>4.5.1</Version>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>SMBLibrary.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <!-- WebdavSharp: 上游 Release 构建会调用 ILRepack 合并 Utilities.dll，
+       但 ILRepack.exe 只在上游作者机器上存在。此处改为仅当 exe 存在时才合并；
+       不合并时 Utilities.dll 随构建产物一同输出，运行时不受影响。 -->
+  <Target Name="ILRepack" Condition="'$(Configuration)' == 'Release' And Exists('$(ProgramW6432)\ILRepack\ILRepack.exe')" AfterTargets="AfterBuild">
+    <Exec Command="&quot;$(ProgramW6432)\ILRepack\ILRepack.exe&quot; /out=&quot;$(OutputPath)\SMBLibrary.dll&quot; &quot;$(OutputPath)\SMBLibrary.dll&quot; &quot;$(OutputPath)\Utilities.dll&quot;"></Exec>
+  </Target>
+
+</Project>

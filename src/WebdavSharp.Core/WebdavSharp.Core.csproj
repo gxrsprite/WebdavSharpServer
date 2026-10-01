@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>WebdavSharp 核心类库：实体 / 权限求值 / 路径安全 / 认证 / 配置选项（无 Web 依赖）。</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 仅引 FreeSql 主包取 DataAnnotations（Column/Table/Navigate），与 WebBlazor 同版本 -->
+    <PackageReference Include="FreeSql" Version="3.5.309" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.1" />
+  </ItemGroup>
+
+</Project>

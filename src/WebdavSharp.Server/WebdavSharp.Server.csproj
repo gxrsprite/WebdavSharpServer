@@ -1,0 +1,59 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <Description>WebdavSharp 服务端：WebDAV 中间件 + 手写轻量 Blazor Server 管理后台。</Description>
+
+    <!-- DATAS：让 Server GC 根据应用实际内存压力动态调整堆规模。 -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <GarbageCollectionAdaptationMode>1</GarbageCollectionAdaptationMode>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WebdavSharp.Core\WebdavSharp.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      SQLite 用微软官方适配器：FreeSql.Provider.SqliteCore（基于 Microsoft.Data.Sqlite.Core）
+      + SQLitePCLRaw.bundle_e_sqlite3 提供全架构原生库。
+      相比旧的 FreeSql.Provider.Sqlite（System.Data.SQLite，仅 linux-x64/osx-x64/win-x64/win-x86）
+      这套覆盖 linux-arm64、osx-arm64、win-arm64、musl 等，树莓派/Apple Silicon 可用。
+    -->
+    <PackageReference Include="FreeSql.Provider.SqliteCore" Version="3.5.309" />
+    <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
+    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
+
+    <!--
+      FTP 服务端：FmiSrl.FtpServer.Server（全异步、原生 DI、支持自定义认证与文件系统提供者，
+      正好用来把我们的规则引擎接进去）。
+      Miku 是它的传递依赖，上游声明 (>= 1.3.3) 但该版本在 nuget 上不存在，
+      会触发 NU1603 警告；显式固定 2.0.0 消除噪音（否则每次构建 4 个警告）。
+    -->
+    <PackageReference Include="FmiSrl.FtpServer.Server" Version="1.3.3" />
+    <PackageReference Include="Miku" Version="2.0.0" />
+
+    <!--
+      SMB 服务端：SMBLibrary（LGPL-3.0；SMB 1.0/CIFS、2.0、2.1、3.0 服务端+客户端，跨平台）。
+      选用原因：.NET 无内置 SMB 服务端，自研协议栈工量极大。
+      关键扩展点（已核实）：
+        - FileSystemShare(shareName, INTFileStore)  → 每个虚拟挂载 = 一个 SMB 共享
+        - FileSystemShare.HasAccess/HasReadAccess/HasWriteAccess → 逐路径权限卡点
+        - SMBServer.ConnectionRequested 事件 → 接入我们 dav_user 表的口令校验
+      注意：LGPL-3.0 属弱著佐权；为实现 CX 文件管理器所需的 SMB1 RAP
+      （\\PIPE\\LANMAN NetShareEnum，上游未实现），本仓库在 third_party/SMBLibrary
+      中 vendored 上游 v1.5.7 源码并打补丁（见 third_party/SMBLibrary/README.md）。
+      闭源分发需保留可替换该库的能力，并遵守 LGPL-3.0 义务。
+    -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\third_party\SMBLibrary\SMBLibrary\SMBLibrary.csproj" />
+    <!-- SMBLibrary 内部依赖 Utilities（上游 NuGet 用 ILRepack 合并了它）；
+         ProjectReference 下 PrivateAssets=All 会阻断传递，需显式引用。 -->
+    <ProjectReference Include="..\..\third_party\SMBLibrary\Utilities\Utilities.csproj" />
+  </ItemGroup>
+
+</Project>

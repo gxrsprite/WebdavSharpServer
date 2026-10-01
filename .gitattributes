@@ -1,0 +1,26 @@
+# 跨平台换行/编码规范（只影响 Server/WebdavSharp 子树）
+# 目标：以 LF 入库，检出时按平台自动适配，避免 Windows 开发 / Linux 部署的噪音 diff。
+
+* text=auto
+
+# 源码统一 LF（C#/Razor/脚本/文档）
+*.cs    text eol=lf
+*.razor text eol=lf
+*.csproj text eol=lf
+*.props text eol=lf
+*.slnx  text eol=lf
+*.sln   text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.ps1   text eol=lf
+*.sh    text eol=lf
+
+# 二进制：不要做换行转换
+*.db        binary
+*.dll       binary
+*.so        binary
+*.dylib     binary
+*.gz        binary
+*.br        binary
+*.png       binary
+*.ico       binary

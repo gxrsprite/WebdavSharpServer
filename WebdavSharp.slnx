@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/WebdavSharp.Core/WebdavSharp.Core.csproj" />
+  <Project Path="src/WebdavSharp.Server/WebdavSharp.Server.csproj" />
+  <Project Path="tests/WebdavSharp.Tests/WebdavSharp.Tests.csproj" />
+</Solution>

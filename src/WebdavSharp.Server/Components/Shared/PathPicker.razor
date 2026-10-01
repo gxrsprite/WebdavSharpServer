@@ -1,0 +1,358 @@
+@* 服务端路径选择控件：浏览服务所在电脑的磁盘与目录，支持多选（目录+文件）。
+   与调用方通过参数/回调协作：
+     Mode       单选目录 / 多选任意
+     OnConfirm  返回所选物理路径列表
+     OnCancel   取消 *@
+@inject IFreeSql Db
+
+@if (Visible)
+{
+    <div class="modal-mask" @onclick="Cancel">
+        <div class="modal" @onclick:stopPropagation="true">
+            <div class="modal-header">
+                <span>@Title</span>
+                <button class="btn-sm" @onclick="Cancel">✕</button>
+            </div>
+
+            <div class="modal-body">
+                @* 盘符 *@
+                <div class="picker-drives">
+                    @foreach (var d in _drives)
+                    {
+                        <button class="@(string.Equals(_current, d.Root, StringComparison.OrdinalIgnoreCase) ? "on" : "")"
+                                @onclick="() => Navigate(d.Root)">
+                            💽 @d.Label
+                        </button>
+                    }
+                </div>
+
+                @* 当前路径 + 上级 *@
+                <div class="picker-path">
+                    <button class="btn-sm" @onclick="GoUp" disabled="@(!CanGoUp)">⬆ 上级</button>
+                    <input @bind="_currentInput" @bind:event="oninput" @onkeydown="OnPathKeyDown" />
+                    <button class="btn-sm" @onclick="NavigateInput">转到</button>
+                    @if (MultiSelect)
+                    {
+                        <button class="btn-sm" @onclick="SelectCurrentDir">选中当前目录</button>
+                    }
+                    else
+                    {
+                        <button class="btn-sm btn-primary" @onclick="SelectCurrentDir">选择此目录</button>
+                    }
+                </div>
+
+                @if (!string.IsNullOrEmpty(_error))
+                {
+                    <p class="err">@_error</p>
+                }
+
+                @* 条目列表：目录可双击进入，勾选框用于多选 *@
+                <div class="picker-list">
+                    @if (_entries.Count == 0)
+                    {
+                        <div class="picker-item"><span class="muted">（空目录）</span></div>
+                    }
+                    @foreach (var e in _entries)
+                    {
+                        <div class="picker-item @(e.IsDir ? "dir" : "")">
+                            @if (MultiSelect)
+                            {
+                                <input type="checkbox" checked="@_selected.Contains(e.Path)"
+                                       @onchange="(ev) => Toggle(e.Path, (bool)(ev.Value ?? false))" />
+                            }
+                            else if (e.IsDir)
+                            {
+                                <input type="radio" name="pickdir" checked="@(_selected.Contains(e.Path))"
+                                       @onchange="() => PickSingleDir(e.Path)" />
+                            }
+                            <span class="icon">@(e.IsDir ? "📁" : "📄")</span>
+                            <span class="nm" @ondblclick="() => OnEntryDoubleClick(e)"
+                                  title="@e.Path">@e.Name</span>
+                            @if (e.IsDir)
+                            {
+                                <button class="btn-sm" @onclick="() => Navigate(e.Path)">打开</button>
+                            }
+                        </div>
+                    }
+                </div>
+
+                @if (_selected.Count > 0)
+                {
+                    <div class="picker-chosen">
+                        <div class="muted" style="margin-bottom:4px;">已选 @_selected.Count 项：</div>
+                        @foreach (var s in _selected.OrderBy(x => x))
+                        {
+                            <div>
+                                @s
+                                <button class="btn-sm" style="margin-left:6px;"
+                                        @onclick="() => Toggle(s, false)">移除</button>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+
+            <div class="modal-footer">
+                <span class="muted" style="margin-right:auto;">
+                    @(MultiSelect ? $"已选 {_selected.Count} 项（可多选目录与文件）" : $"已选 {_selected.Count} 项")
+                </span>
+                <button @onclick="Cancel">取消</button>
+                <button class="btn-primary" @onclick="Confirm" disabled="@(_selected.Count == 0)">确定</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    /// <summary>是否显示。</summary>
+    [Parameter] public bool Visible { get; set; }
+
+    /// <summary>标题。</summary>
+    [Parameter] public string Title { get; set; } = "选择路径";
+
+    /// <summary>true=可多选目录与文件；false=只选一个目录。</summary>
+    [Parameter] public bool MultiSelect { get; set; } = true;
+
+    /// <summary>初始目录（物理路径）。</summary>
+    [Parameter] public string? InitialPath { get; set; }
+
+    /// <summary>确定时回调（返回所选物理路径）。</summary>
+    [Parameter] public EventCallback<List<string>> OnConfirm { get; set; }
+
+    /// <summary>取消回调。</summary>
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    private sealed record Entry(string Name, string Path, bool IsDir);
+
+    private sealed record DriveItem(string Root, string Label);
+
+    private List<DriveItem> _drives = [];
+    private List<Entry> _entries = [];
+    private readonly HashSet<string> _selected = new(StringComparer.OrdinalIgnoreCase);
+    private string _current = string.Empty;
+    private string _currentInput = string.Empty;
+    private string? _error;
+
+    protected override void OnParametersSet()
+    {
+        if (!Visible)
+            return;
+
+        // 每次打开重新枚举盘符（U 盘/网盘可能插拔）
+        _drives = EnumerateDrives();
+        var start = PickStartDirectory();
+        if (!string.Equals(_current, start, StringComparison.OrdinalIgnoreCase) || _entries.Count == 0)
+            Navigate(start);
+        _currentInput = _current;
+    }
+
+    /// <summary>枚举可浏览的根：Windows 为各盘符；Unix 为 / 及各挂载点。</summary>
+    private static List<DriveItem> EnumerateDrives()
+    {
+        var list = new List<DriveItem>();
+        try
+        {
+            foreach (var d in DriveInfo.GetDrives())
+            {
+                if (!d.IsReady)
+                    continue;
+                string label;
+                if (OperatingSystem.IsWindows())
+                {
+                    label = string.IsNullOrEmpty(d.VolumeLabel)
+                        ? d.Name
+                        : $"{d.Name.TrimEnd('\\')} ({d.VolumeLabel})";
+                }
+                else
+                {
+                    // Unix：DriveInfo 返回挂载点（/、/home…），卷标通常为空
+                    label = d.Name == "/" ? "/ (根)" : d.Name.TrimEnd('/');
+                }
+                list.Add(new DriveItem(d.RootDirectory.FullName, label));
+            }
+        }
+        catch
+        {
+            // 枚举失败时用系统根兜底
+        }
+
+        if (list.Count == 0)
+            list.Add(new DriveItem(PlatformPath.SystemRoot, PlatformPath.SystemRoot));
+
+        // Unix 上确保 / 始终在列表首位（有些环境 DriveInfo 不返回根）
+        if (!OperatingSystem.IsWindows() &&
+            !list.Any(x => x.Root == "/"))
+        {
+            list.Insert(0, new DriveItem("/", "/ (根)"));
+        }
+
+        return list
+            .OrderBy(x => OperatingSystem.IsWindows() ? x.Root : (x.Root == "/" ? "" : x.Root))
+            .ToList();
+    }
+
+    private string PickStartDirectory()
+    {
+        if (!string.IsNullOrWhiteSpace(InitialPath))
+        {
+            try
+            {
+                var full = Path.GetFullPath(InitialPath);
+                if (Directory.Exists(full))
+                    return full;
+                var parent = Path.GetDirectoryName(full);
+                if (!string.IsNullOrEmpty(parent) && Directory.Exists(parent))
+                    return parent;
+            }
+            catch { /* 用盘符兜底 */ }
+        }
+        return _drives.Count > 0 ? _drives[0].Root : "C:\\";
+    }
+
+    private bool CanGoUp
+    {
+        get
+        {
+            var parent = ParentOf(_current);
+            return parent is not null && !string.Equals(parent, _current, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    /// <summary>上级目录；已是根（Windows 盘根 / Unix "/"）返回 null。跨平台。</summary>
+    private static string? ParentOf(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return null;
+        try
+        {
+            var sep = Path.DirectorySeparatorChar;
+            var trimmed = path.TrimEnd(sep);
+
+            // Unix 根
+            if (trimmed.Length == 0)
+                return null;
+            // Windows 盘符根 "C:"
+            if (trimmed.Length == 2 && trimmed[1] == ':')
+                return null;
+
+            return Directory.GetParent(trimmed)?.FullName;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private void Navigate(string dir)
+    {
+        _error = null;
+        try
+        {
+            var full = Path.GetFullPath(dir);
+            if (!Directory.Exists(full))
+            {
+                _error = $"目录不存在：{full}";
+                return;
+            }
+            _current = full;
+            _currentInput = full;
+            _entries = Enumerate(full);
+        }
+        catch (Exception ex)
+        {
+            _error = $"无法访问：{ex.Message}";
+        }
+        StateHasChanged();
+    }
+
+    private static List<Entry> Enumerate(string dir)
+    {
+        var list = new List<Entry>();
+        try
+        {
+            foreach (var d in Directory.EnumerateDirectories(dir))
+            {
+                var name = Path.GetFileName(d);
+                if (string.IsNullOrEmpty(name))
+                    continue;
+                list.Add(new Entry(name, d, true));
+            }
+            foreach (var f in Directory.EnumerateFiles(dir))
+                list.Add(new Entry(Path.GetFileName(f), f, false));
+        }
+        catch
+        {
+            // 权限不足等：返回已枚举部分
+        }
+        return list
+            .OrderByDescending(e => e.IsDir)
+            .ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private void GoUp()
+    {
+        var parent = ParentOf(_current);
+        if (parent is not null)
+            Navigate(parent);
+    }
+
+    private void NavigateInput() => Navigate(_currentInput);
+
+    private void OnPathKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            Navigate(_currentInput);
+    }
+
+    private void OnEntryDoubleClick(Entry e)
+    {
+        if (e.IsDir)
+            Navigate(e.Path);
+        else
+            PickFile(e.Path);
+    }
+
+    private void Toggle(string path, bool on)
+    {
+        if (on)
+            _selected.Add(path);
+        else
+            _selected.Remove(path);
+    }
+
+    private void PickSingleDir(string path)
+    {
+        _selected.Clear();
+        _selected.Add(path);
+    }
+
+    private void PickFile(string path)
+    {
+        if (MultiSelect)
+            _selected.Add(path);
+        else
+            _selected.Add(path);
+    }
+
+    private async Task SelectCurrentDir()
+    {
+        if (!string.IsNullOrEmpty(_current))
+            _selected.Add(_current);
+        if (!MultiSelect)
+            await Confirm();
+    }
+
+    private async Task Confirm()
+    {
+        if (_selected.Count == 0)
+            return;
+        await OnConfirm.InvokeAsync(_selected.ToList());
+    }
+
+    private async Task Cancel()
+    {
+        _selected.Clear();
+        await OnCancel.InvokeAsync();
+    }
+}

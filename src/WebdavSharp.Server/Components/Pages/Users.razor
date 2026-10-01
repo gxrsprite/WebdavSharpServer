@@ -1,0 +1,178 @@
+@page "/admin/users"
+@attribute [Authorize]
+@inject IFreeSql Db
+@inject PasswordHasher Hasher
+@rendermode InteractiveServer
+
+<h2>用户与角色</h2>
+
+<div class="card">
+    <h3>新建用户</h3>
+    <div class="row">
+        <input placeholder="用户名" @bind="_newUsername" />
+        <input placeholder="昵称" @bind="_newNickname" />
+        <input placeholder="初始密码" type="password" @bind="_newPassword" />
+        <input placeholder="主目录（留空走全局挂载）" @bind="_newRootPath" style="min-width:260px;" />
+        <select @bind="_newRoleId">
+            <option value="">— 角色 —</option>
+            @foreach (var r in _roles)
+            {
+                <option value="@r.Id">@r.Name</option>
+            }
+        </select>
+        <button @onclick="CreateUser">创建</button>
+    </div>
+    @if (!string.IsNullOrEmpty(_msg)) { <p class="err">@_msg</p> }
+</div>
+
+<div class="card">
+    <h3>用户列表</h3>
+    <table class="grid">
+        <thead><tr><th>用户名</th><th>昵称</th><th>角色</th><th>主目录</th><th>启用</th><th>系统</th><th>操作</th></tr></thead>
+        <tbody>
+        @foreach (var u in _users)
+        {
+            <tr>
+                <td>@u.Username</td>
+                <td>@u.Nickname</td>
+                <td>@string.Join(",", _userRoles.GetValueOrDefault(u.Id, []))</td>
+                <td>
+                    <input value="@_rootEdits.GetValueOrDefault(u.Id, u.RootPath)"
+                           @onchange="(e) => _rootEdits[u.Id] = e.Value?.ToString() ?? string.Empty"
+                           placeholder="全局挂载" style="min-width:200px;" />
+                    <button @onclick="() => SaveRoot(u.Id)">保存</button>
+                </td>
+                <td>@(u.IsEnabled ? "是" : "否")</td>
+                <td>@(u.IsSystem ? "是" : "否")</td>
+                <td>
+                    <button @onclick="() => Toggle(u.Id)">启用/禁用</button>
+                    <button @onclick="() => ResetPassword(u.Id)">重置密码</button>
+                    @if (!u.IsSystem) { <button @onclick="() => Delete(u.Id)">删除</button> }
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+    <p class="muted">改密/禁用会递增 AuthVersion，已颁发的管理 Cookie 与 Basic 会话即时失效（需重新登录；Basic 每次请求都校验口令）。重置密码默认设为 <code>123456</code>，请立即修改。主目录设置后该用户整个虚拟空间映射到此目录（相对路径锚到全局根），留空恢复全局挂载。</p>
+</div>
+
+<div class="card">
+    <h3>新建角色</h3>
+    <div class="row">
+        <input placeholder="角色名" @bind="_newRoleName" />
+        <button @onclick="CreateRole">创建角色</button>
+    </div>
+    <div class="row">
+        <select @bind="_assignUserId">
+            <option value="">— 用户 —</option>
+            @foreach (var u in _users) { <option value="@u.Id">@u.Username</option> }
+        </select>
+        <select @bind="_assignRoleId">
+            <option value="">— 角色 —</option>
+            @foreach (var r in _roles) { <option value="@r.Id">@r.Name</option> }
+        </select>
+        <button @onclick="AssignRole">授予角色</button>
+    </div>
+</div>
+
+@code {
+    private List<DavUser> _users = [];
+    private List<DavRole> _roles = [];
+    private Dictionary<Guid, List<string>> _userRoles = new();
+    private Dictionary<Guid, string> _rootEdits = new();
+    private string _newUsername = "", _newNickname = "", _newPassword = "", _newRoleId = "", _newRootPath = "";
+    private string _newRoleName = "", _assignUserId = "", _assignRoleId = "", _msg = "";
+
+    protected override Task OnInitializedAsync() { Reload(); return Task.CompletedTask; }
+
+    private void Reload()
+    {
+        _users = Db.Select<DavUser>().OrderBy(u => u.Username).ToList();
+        _roles = Db.Select<DavRole>().OrderBy(r => r.Name).ToList();
+        var links = Db.Select<DavUserRole>().ToList();
+        var names = _roles.ToDictionary(r => r.Id, r => r.Name);
+        _userRoles = links.GroupBy(l => l.UserId)
+            .ToDictionary(g => g.Key, g => g.Select(l => names.GetValueOrDefault(l.RoleId, "?")).ToList());
+    }
+
+    private void CreateUser()
+    {
+        _msg = "";
+        if (string.IsNullOrWhiteSpace(_newUsername) || string.IsNullOrWhiteSpace(_newPassword))
+        { _msg = "用户名和初始密码必填。"; return; }
+        if (Db.Select<DavUser>().Any(u => u.Username == _newUsername.Trim()))
+        { _msg = "用户名已存在。"; return; }
+        var user = new DavUser
+        {
+            Username = _newUsername.Trim(),
+            Nickname = string.IsNullOrWhiteSpace(_newNickname) ? _newUsername.Trim() : _newNickname.Trim(),
+            PasswordHash = Hasher.Hash(_newPassword),
+            NtHash = NtHash.ComputeHex(_newPassword),
+            RootPath = _newRootPath.Trim(),
+        };
+        Db.Insert(user).ExecuteAffrows();
+        if (Guid.TryParse(_newRoleId, out var roleId))
+            Db.Insert(new DavUserRole { UserId = user.Id, RoleId = roleId }).ExecuteAffrows();
+        _newUsername = _newNickname = _newPassword = _newRoleId = _newRootPath = "";
+        Reload();
+    }
+
+    private void CreateRole()
+    {
+        if (string.IsNullOrWhiteSpace(_newRoleName)) return;
+        if (Db.Select<DavRole>().Any(r => r.Name == _newRoleName.Trim())) return;
+        Db.Insert(new DavRole { Name = _newRoleName.Trim() }).ExecuteAffrows();
+        _newRoleName = "";
+        Reload();
+    }
+
+    private void AssignRole()
+    {
+        if (Guid.TryParse(_assignUserId, out var uid) && Guid.TryParse(_assignRoleId, out var rid))
+        {
+            if (!Db.Select<DavUserRole>().Any(x => x.UserId == uid && x.RoleId == rid))
+                Db.Insert(new DavUserRole { UserId = uid, RoleId = rid }).ExecuteAffrows();
+            Reload();
+        }
+    }
+
+    private void Toggle(Guid id)
+    {
+        var u = Db.Select<DavUser>().Where(x => x.Id == id).First();
+        if (u is null || u.IsSystem) return;
+        u.IsEnabled = !u.IsEnabled;
+        u.AuthVersion++;
+        Db.Update<DavUser>().Set(x => x.IsEnabled, u.IsEnabled).Set(x => x.AuthVersion, u.AuthVersion).Where(x => x.Id == id).ExecuteAffrows();
+        Reload();
+    }
+
+    private void ResetPassword(Guid id)
+    {
+        var u = Db.Select<DavUser>().Where(x => x.Id == id).First();
+        if (u is null) return;
+        Db.Update<DavUser>()
+            .Set(x => x.PasswordHash, Hasher.Hash("123456"))
+            .Set(x => x.NtHash, NtHash.ComputeHex("123456"))
+            .Set(x => x.AuthVersion, u.AuthVersion + 1)
+            .Where(x => x.Id == id).ExecuteAffrows();
+        Reload();
+    }
+
+    private void SaveRoot(Guid id)
+    {
+        var root = _rootEdits.GetValueOrDefault(id, string.Empty).Trim();
+        Db.Update<DavUser>().Set(x => x.RootPath, root).Where(x => x.Id == id).ExecuteAffrows();
+        _rootEdits.Remove(id);
+        Reload();
+    }
+
+    private void Delete(Guid id)
+    {
+        var u = Db.Select<DavUser>().Where(x => x.Id == id).First();
+        if (u is null || u.IsSystem) return;
+        Db.Delete<DavUserRole>().Where(x => x.UserId == id).ExecuteAffrows();
+        Db.Delete<DavRule>().Where(x => x.UserId == id).ExecuteAffrows();
+        Db.Delete<DavUser>().Where(x => x.Id == id).ExecuteAffrows();
+        Reload();
+    }
+}

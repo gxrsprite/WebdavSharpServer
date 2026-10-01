@@ -1,0 +1,38 @@
+@page "/admin"
+@attribute [Authorize]
+@inject IFreeSql Db
+@rendermode InteractiveServer
+
+<h2>总览</h2>
+
+@if (_stats is null)
+{
+    <p>加载中…</p>
+}
+else
+{
+    <div class="card">
+        <div class="row"><span>用户：<b>@_stats.Users</b></span><span>角色：<b>@_stats.Roles</b></span></div>
+        <div class="row"><span>虚拟挂载：<b>@_stats.Mounts</b></span><span>访问规则：<b>@_stats.Rules</b></span></div>
+        <p class="muted">WebDAV 根：<code>@_prefix</code>（Basic 认证）。规则“最后一条命中生效”，path 前缀 / regex 字面匹配，详见 docs/permission-model.md。</p>
+    </div>
+}
+
+@code {
+    private Stats? _stats;
+    private string _prefix = "/dav/";
+    [Inject] private IConfiguration Config { get; set; } = default!;
+
+    protected override Task OnInitializedAsync()
+    {
+        _prefix = Config.GetValue<string>("Dav:Prefix") ?? "/dav/";
+        _stats = new Stats(
+            (int)Db.Select<DavUser>().Count(),
+            (int)Db.Select<DavRole>().Count(),
+            (int)Db.Select<DavMount>().Count(),
+            (int)Db.Select<DavRule>().Count());
+        return Task.CompletedTask;
+    }
+
+    private sealed record Stats(long Users, long Roles, long Mounts, long Rules);
+}

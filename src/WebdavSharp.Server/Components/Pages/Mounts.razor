@@ -1,0 +1,118 @@
+@page "/admin/mounts"
+@attribute [Authorize]
+@inject IFreeSql Db
+@rendermode InteractiveServer
+
+<h2>虚拟挂载</h2>
+<p class="muted">把物理目录挂为虚拟根条目：<code>/dav/&lt;挂载名&gt;/…</code>。首段未命中挂载名的路径走 <code>Dav:Directory</code> 单根回退。</p>
+
+<div class="card">
+    <h3>新建挂载</h3>
+    <div class="row">
+        <input placeholder="挂载名（如 media）" @bind="_name" />
+        <input placeholder="物理路径" @bind="_path" style="min-width:300px;" />
+        <button @onclick="() => _picking = true">📂 浏览…</button>
+        <input placeholder="排序" @bind="_sort" style="width:80px;" />
+        <label class="muted"><input type="checkbox" @bind="_visible" /> 可见（取消=不列出，可直达）</label>
+        <button class="btn-primary" @onclick="Create">创建</button>
+    </div>
+    @if (!string.IsNullOrEmpty(_msg)) { <p class="err">@_msg</p> }
+</div>
+
+<div class="card">
+    <table class="grid">
+        <thead><tr><th>挂载名</th><th>物理路径</th><th>排序</th><th>启用</th><th>可见</th><th>操作</th></tr></thead>
+        <tbody>
+        @foreach (var m in _mounts)
+        {
+            <tr>
+                <td>@m.Name</td>
+                <td>@m.PhysicalPath</td>
+                <td>@m.SortOrder</td>
+                <td>@(m.IsEnabled ? "是" : "否")</td>
+                <td>@(m.IsVisible ? "是" : "否")</td>
+                <td>
+                    <button class="btn-sm" @onclick="() => Toggle(m.Id)">启用/禁用</button>
+                    <button class="btn-sm" @onclick="() => ToggleVisible(m.Id)">可见/隐藏</button>
+                    <button class="btn-sm btn-danger" @onclick="() => Delete(m.Id)">删除</button>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+    <p class="muted">不可见 = PROPFIND 不返回该入口、知道 URL 仍可直接访问（权限照常校验）。</p>
+</div>
+
+<PathPicker Visible="_picking" Title="选择挂载的物理目录" MultiSelect="false"
+            InitialPath="@_path"
+            OnConfirm="OnPicked" OnCancel="() => _picking = false" />
+
+@code {
+    private List<DavMount> _mounts = [];
+    private string _name = "", _path = "", _sort = "0", _msg = "";
+    private bool _visible = true, _picking;
+
+    protected override Task OnInitializedAsync() { Reload(); return Task.CompletedTask; }
+
+    private void Reload() => _mounts = Db.Select<DavMount>().OrderBy(m => m.SortOrder).ToList();
+
+    private void OnPicked(List<string> paths)
+    {
+        _picking = false;
+        if (paths.Count > 0)
+            _path = paths[0];
+    }
+
+    private void Create()
+    {
+        _msg = "";
+        var name = _name.Trim().Trim('/');
+        var err = DavMountValidator.GetError(name);
+        if (err is not null) { _msg = err; return; }
+        if (string.IsNullOrWhiteSpace(_path))
+        { _msg = "物理路径必填（可点「浏览…」选择）。"; return; }
+        if (Db.Select<DavMount>().Any(m => m.Name == name)) { _msg = "挂载名已存在。"; return; }
+
+        int.TryParse(_sort, out var sort);
+        string full;
+        try { full = Path.GetFullPath(_path.Trim()); }
+        catch (Exception ex) { _msg = "路径非法：" + ex.Message; return; }
+        if (!Directory.Exists(full)) { _msg = "目录不存在：" + full; return; }
+
+        Db.Insert(new DavMount
+        {
+            Name = name,
+            PhysicalPath = full,
+            SortOrder = sort,
+            IsVisible = _visible,
+        }).ExecuteAffrows();
+        DavCaseProbe.Invalidate(full);
+        _name = _path = ""; _sort = "0"; _visible = true;
+        Reload();
+    }
+
+    private void Toggle(Guid id)
+    {
+        var m = Db.Select<DavMount>().Where(x => x.Id == id).First();
+        if (m is null) return;
+        Db.Update<DavMount>().Set(x => x.IsEnabled, !m.IsEnabled).Where(x => x.Id == id).ExecuteAffrows();
+        Reload();
+    }
+
+    private void ToggleVisible(Guid id)
+    {
+        var m = Db.Select<DavMount>().Where(x => x.Id == id).First();
+        if (m is null) return;
+        Db.Update<DavMount>().Set(x => x.IsVisible, !m.IsVisible).Where(x => x.Id == id).ExecuteAffrows();
+        Reload();
+    }
+
+    private void Delete(Guid id)
+    {
+        var m = Db.Select<DavMount>().Where(x => x.Id == id).First();
+        Db.Delete<DavMount>().Where(x => x.Id == id).ExecuteAffrows();
+        if (m is not null)
+            DavCaseProbe.Invalidate(m.PhysicalPath);
+        Reload();
+    }
+}

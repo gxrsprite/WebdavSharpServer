@@ -1,0 +1,14 @@
+<Router AppAssembly="@typeof(App).Assembly">
+    <Found Context="routeData">
+        <AuthorizeRouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)">
+            <NotAuthorized>
+                <p>未登录或无权限，<a href="/admin/login">去登录</a>。</p>
+            </NotAuthorized>
+        </AuthorizeRouteView>
+    </Found>
+    <NotFound>
+        <LayoutView Layout="@typeof(MainLayout)">
+            <p>页面不存在，<a href="/admin">回管理首页</a>。</p>
+        </LayoutView>
+    </NotFound>
+</Router>

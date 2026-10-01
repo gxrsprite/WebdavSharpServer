@@ -1,0 +1,21 @@
+@inherits LayoutComponentBase
+
+<div class="layout">
+    <nav class="side">
+        <h3>WebdavSharp</h3>
+        <NavLink href="/admin" Match="NavLinkMatch.All">总览</NavLink>
+        <NavLink href="/admin/users">用户与角色</NavLink>
+        <NavLink href="/admin/mounts">虚拟挂载</NavLink>
+        <NavLink href="/admin/rules">访问规则</NavLink>
+        <NavLink href="/admin/services">服务管理</NavLink>
+        <NavLink href="/admin/audit">审计日志</NavLink>
+        <div class="side-footer">
+            <form method="post" action="/api/admin/logout">
+                <button type="submit" style="width:100%;">退出登录</button>
+            </form>
+        </div>
+    </nav>
+    <main class="body">
+        @Body
+    </main>
+</div>
