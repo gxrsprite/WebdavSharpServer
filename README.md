@@ -121,5 +121,8 @@ SMB 服务端基于 [SMBLibrary](https://github.com/TalAloni/SMBLibrary)（LGPL-
 
 ## 许可证
 
-- 本仓库自研代码（`src/`、`tests/`、`docs/`、`scripts/`）：未声明许可证，默认保留所有权利——如需开源请补充 `LICENSE`（建议 MIT/Apache-2.0）。
-- `third_party/SMBLibrary`：**LGPL-3.0**（见该目录 `License.txt`），修改与分发须遵守其条款。
+- 自研代码（`src/`、`tests/`、`docs/`、`scripts/` 及仓库根配置文件）：**Apache-2.0**（见 [`LICENSE`](LICENSE)，归属说明见 [`NOTICE`](NOTICE)）。
+  ```
+  Copyright 2026 WebdavSharpServer contributors
+  ```
+- `third_party/SMBLibrary`：**LGPL-3.0**（见该目录 `License.txt`），修改与分发须遵守其条款；**闭源分发需保留可替换该库的能力**。

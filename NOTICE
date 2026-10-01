@@ -1,0 +1,11 @@
+WebdavSharpServer — NOTICE
+
+自研代码（src/、tests/、docs/、scripts/ 及仓库根配置文件）：
+  Copyright 2026 WebdavSharpServer contributors
+  Licensed under the Apache License, Version 2.0（见仓库根 LICENSE）。
+
+第三方代码（不受上述 Apache-2.0 覆盖）：
+  third_party/SMBLibrary — vendored from https://github.com/TalAloni/SMBLibrary
+  （上游 tag v1.5.7 + WebdavSharp 补丁），Licensed under the GNU Lesser
+  General Public License v3.0（见 third_party/SMBLibrary/License.txt）。
+  闭源分发须保留可替换该库的能力，并遵守 LGPL-3.0 义务。

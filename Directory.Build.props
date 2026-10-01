@@ -7,5 +7,7 @@
     <NoWarn>1701;1702;CS1573;CS8600;CS8601;CS8602;CS8603;CS8604;CS8605;CS8618;CS8619;CS8620;CS8622;CS8625;CS8629;CS8714;CS1591</NoWarn>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <RootNamespace>$(MSBuildProjectName.Replace("-", "_"))</RootNamespace>
+    <!-- 自研代码 Apache-2.0（third_party/SMBLibrary 有自己的 props，不受此影响，保持 LGPL-3.0）。 -->
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
   </PropertyGroup>
 </Project>
