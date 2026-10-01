@@ -11,7 +11,7 @@
 - **权限模型**：`C` 创建 / `R` 读取 / `U` 更新 / `D` 删除，`none` 显式拒绝；适用规则按 `SortOrder` 从小到大、**最后一条命中生效**；`path` 前缀匹配，`regex` 全路径匹配；跨挂载 COPY/MOVE/DELETE 要求所有触及点都有权限。
 - **管理后台**：手写轻量 Blazor Server（无 BootstrapBlazor 依赖），`/admin`：用户 / 角色 / 挂载 / 规则 / 服务开关 / 审计日志。
 - **安全**：PBKDF2-SHA256 存口令（SMB 另存 NT Hash 用于 NTLMv2）；改密/禁用递增 `AuthVersion` 使 Cookie 即时失效；暴力破解防护（同 IP+用户 5 分钟 5 次失败封 15 分钟，`429` + `Retry-After`）；审计日志（写操作全记、读操作只记失败）；健康探针 `/healthz`、`/readyz`。
-- **跨平台**：Windows / Linux / macOS，x64 + arm64；SQLite 用微软官方 `FreeSql.Provider.SqliteCore` + `SQLitePCLRaw.bundle_e_sqlite3`（树莓派 / Apple Silicon 可用）。
+- **跨平台**：Windows / Linux / macOS，x64 + arm64；数据访问用 FreeSql ORM（第三方），SQLite 底层是微软官方驱动 `Microsoft.Data.Sqlite`（经 `FreeSql.Provider.SqliteCore`）+ `SQLitePCLRaw.bundle_e_sqlite3` 原生库（树莓派 / Apple Silicon 可用）。
 
 ## 仓库结构
 
@@ -82,9 +82,9 @@ dotnet run --project src/WebdavSharp.Server
 
 ## 客户端对接
 
-- Windows 资源管理器 → 映射网络驱动器填 `http://host:5210/dav/`（Basic）。
-- rclone / Cyberduck / WinSCP：WebDAV + Basic。
-- 手机 CX 文件管理器：SMB，实测走 SMB1（含 RAP `NetShareEnum` 根枚举与空目录兼容补丁，见下）。
+- Windows 资源管理器 → 映射网络驱动器填 `http://host:5210/dav/`（Basic，需 `BasicAuthLevel=2`，见 [`docs/client-compat.md`](docs/client-compat.md)）；SMB 与 FTP 在资源管理器下均验证可用。
+- 安卓：CX 文件管理器（SMB，实测走 SMB1，含 RAP `NetShareEnum` 根枚举与空目录兼容补丁）、MT管理器 / ES文件管理器（SMB / WebDAV / FTP 三协议均验证可用）。
+- rclone / Cyberduck / WinSCP：尚未测试（WebDAV + Basic 对接）。
 - 已知限制：集合 COPY/MOVE 501、LOCK 为兼容性假锁（Office 可保存，无真排他）。
 
 ## 构建 / 测试 / 发布

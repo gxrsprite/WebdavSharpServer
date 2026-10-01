@@ -18,7 +18,8 @@
 
 `Dav:Database` 可选 `Sqlite`（默认）/ `PostgreSQL` / `MySql` / `SqlServer`。
 
-SQLite 走**微软官方适配器**：`FreeSql.Provider.SqliteCore`（基于 `Microsoft.Data.Sqlite.Core`）
+SQLite 经 FreeSql ORM（第三方），provider 为 `FreeSql.Provider.SqliteCore`
+（第三方包，但底层是**微软官方 SQLite 驱动** `Microsoft.Data.Sqlite`）
 + `SQLitePCLRaw.bundle_e_sqlite3` 提供原生库。各 RID **实测**：
 
 | RID | 原生库 | 实测格式 |

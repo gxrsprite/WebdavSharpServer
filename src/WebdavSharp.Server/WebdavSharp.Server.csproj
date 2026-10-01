@@ -15,8 +15,9 @@
 
   <ItemGroup>
     <!--
-      SQLite 用微软官方适配器：FreeSql.Provider.SqliteCore（基于 Microsoft.Data.Sqlite.Core）
-      + SQLitePCLRaw.bundle_e_sqlite3 提供全架构原生库。
+      SQLite 经 FreeSql ORM（第三方）访问；provider 是 FreeSql.Provider.SqliteCore
+      （第三方包），但其底层是微软官方 SQLite 驱动 Microsoft.Data.Sqlite，
+      原生库由 SQLitePCLRaw.bundle_e_sqlite3 提供（全架构）。
       相比旧的 FreeSql.Provider.Sqlite（System.Data.SQLite，仅 linux-x64/osx-x64/win-x64/win-x86）
       这套覆盖 linux-arm64、osx-arm64、win-arm64、musl 等，树莓派/Apple Silicon 可用。
     -->

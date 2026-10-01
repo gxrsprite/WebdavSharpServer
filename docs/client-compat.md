@@ -25,6 +25,14 @@
 - Gboard 拼音会对 `adb shell input text` 的 `.` 做中文转换、拉丁做拼音
   切分；联调输入 IP/密码建议切英文子类型或暂时 `ime disable`。
 
+## MT管理器（Android）— 2026-10-01 真机验证通过
+
+SMB / WebDAV / FTP 三协议连接与基本文件操作（列目录、上传、下载）均验证可用。
+
+## ES文件管理器（Android）— 2026-10-01 真机验证通过
+
+SMB / WebDAV / FTP 三协议连接与基本文件操作（列目录、上传、下载）均验证可用。
+
 ## Windows MiniRedir（`net use` / Explorer，WebClient 服务）— 2026-09-14 实测通过
 
 环境：本机 `http://127.0.0.1:5210/dav/public`，Basic(admin/admin)。
@@ -52,6 +60,11 @@ Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Services\WebClient\Parameters `
   -Name BasicAuthLevel -Value 2
 Restart-Service WebClient -Force
 ```
+
+## Windows 资源管理器（Explorer）— 2026-10-01 验证通过
+
+SMB 与 FTP 连接及基本文件操作（列目录、上传、下载）验证可用。
+其他 Windows 客户端（rclone / WinSCP / FileZilla 等）尚未测试。
 
 ## HttpClient 脚本矩阵（回归冒烟，见各轮记录）
 
