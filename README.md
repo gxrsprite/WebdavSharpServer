@@ -11,7 +11,7 @@
 - **权限模型**：`C` 创建 / `R` 读取 / `U` 更新 / `D` 删除，`none` 显式拒绝；适用规则按 `SortOrder` 从小到大、**最后一条命中生效**；`path` 前缀匹配，`regex` 全路径匹配；跨挂载 COPY/MOVE/DELETE 要求所有触及点都有权限。
 - **管理后台**：手写轻量 Blazor Server（无 BootstrapBlazor 依赖），`/admin`：用户 / 角色 / 挂载 / 规则 / 服务开关 / 审计日志。
 - **安全**：PBKDF2-SHA256 存口令（SMB 另存 NT Hash 用于 NTLMv2）；改密/禁用递增 `AuthVersion` 使 Cookie 即时失效；暴力破解防护（同 IP+用户 5 分钟 5 次失败封 15 分钟，`429` + `Retry-After`）；审计日志（写操作全记、读操作只记失败）；健康探针 `/healthz`、`/readyz`。
-- **跨平台**：Windows / Linux / macOS，x64 + arm64；数据访问用 FreeSql ORM（第三方），SQLite 底层是微软官方驱动 `Microsoft.Data.Sqlite`（经 `FreeSql.Provider.SqliteCore`）+ `SQLitePCLRaw.bundle_e_sqlite3` 原生库（树莓派 / Apple Silicon 可用）。
+- **跨平台**：Windows / Linux（x64 + arm64，有现成发布包，见 [`docs/使用说明.md`](docs/使用说明.md)）；数据访问用 FreeSql ORM（第三方），SQLite 底层是微软官方驱动 `Microsoft.Data.Sqlite`（经 `FreeSql.Provider.SqliteCore`）+ `SQLitePCLRaw.bundle_e_sqlite3` 原生库（随包仅 win/linux 的 x64+arm64，macOS 等需外接 PostgreSQL/MySQL）。
 
 ## 仓库结构
 
@@ -92,12 +92,13 @@ dotnet run --project src/WebdavSharp.Server
 ```powershell
 dotnet build WebdavSharp.slnx --nologo
 dotnet test tests/WebdavSharp.Tests --nologo
-powershell -ExecutionPolicy Bypass -File scripts/publish-webdavsharp.ps1
-# → 产物 artifacts/publish/WebdavSharp（不入库）
-# 自包含指定 RID：scripts/publish-webdavsharp.ps1 -Runtime linux-arm64
+pwsh -File scripts/publish-webdavsharp.ps1 -Runtime win-x64
+# → 产物 artifacts/publish/WebdavSharp-win-x64（不入库）；
+#   -Runtime 可选 win-x64 / win-arm64 / linux-x64 / linux-arm64，
+#   发布后自动裁掉这 4 个之外的 SQLite 原生库；加 -SelfContained 打自包含版
 ```
 
-跨平台发布示例：`dotnet publish -c Release -r linux-arm64 --self-contained false`（已验证 linux-x64 / linux-arm64 / osx-arm64），详见 [`docs/cross-platform.md`](docs/cross-platform.md)。
+现成发布包与安装说明见 [`docs/使用说明.md`](docs/使用说明.md)，跨平台细节见 [`docs/cross-platform.md`](docs/cross-platform.md)。
 
 ## SMB 说明（含 vendored 补丁）
 

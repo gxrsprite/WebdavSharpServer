@@ -20,14 +20,15 @@
 
 SQLite 经 FreeSql ORM（第三方），provider 为 `FreeSql.Provider.SqliteCore`
 （第三方包，但底层是**微软官方 SQLite 驱动** `Microsoft.Data.Sqlite`）
-+ `SQLitePCLRaw.bundle_e_sqlite3` 提供原生库。各 RID **实测**：
+为控制发布体积，随包的 SQLite 原生库只保留 4 个 RID
+（`scripts/publish-webdavsharp.ps1` 发布后自动裁剪，其余删掉）：
 
-| RID | 原生库 | 实测格式 |
+| RID | 原生库 | 随包 |
 |---|---|---|
-| linux-x64 | `libe_sqlite3.so` | ELF ✅ |
-| linux-arm64 | `libe_sqlite3.so` | ELF ✅ |
-| osx-x64 / osx-arm64 | `libe_sqlite3.dylib` | Mach-O ✅ |
-| win-x64 / win-x86 / win-arm64 | `e_sqlite3.dll` | PE ✅ |
+| win-x64 / win-arm64 | `e_sqlite3.dll` | ✅ |
+| linux-x64 / linux-arm64 | `libe_sqlite3.so` | ✅ |
+| osx-x64 / osx-arm64 | `libe_sqlite3.dylib` | ❌（macOS 请切 PostgreSQL/MySQL） |
+| linux-musl-* / win-x86 / 移动端等 | — | ❌（同上，需外接数据库） |
 
 > 历史坑：早期用的 `FreeSql.Provider.Sqlite`（`System.Data.SQLite`）只带
 > linux-x64/osx-x64/win-x64/win-x86 原生库，**ARM64（树莓派、Apple Silicon）没有**，
@@ -41,8 +42,9 @@ SQLite 经 FreeSql ORM（第三方），provider 为 `FreeSql.Provider.SqliteCor
 ### 数据库推荐
 
 - 开发：SQLite（零依赖、单文件）
-- 生产 Linux/macOS（含 ARM64）：SQLite 或 PostgreSQL 均可；
+- 生产 win/linux（含 ARM64）：SQLite 或 PostgreSQL 均可；
   多实例/高并发建议 PostgreSQL（Npgsql 纯托管）或 MySQL
+- 生产 macOS：SQLite 原生库**不随包**，必须切 PostgreSQL/MySQL
 
 ## 发布
 
@@ -50,10 +52,12 @@ SQLite 经 FreeSql ORM（第三方），provider 为 `FreeSql.Provider.SqliteCor
 # 任意平台（推荐，不依赖 PowerShell）
 dotnet publish src/WebdavSharp.Server -c Release -r linux-x64 --self-contained false -o out
 dotnet publish src/WebdavSharp.Server -c Release -r linux-arm64 --self-contained false -o out
-dotnet publish src/WebdavSharp.Server -c Release -r osx-arm64 --self-contained false -o out
 
-# Windows（PowerShell 7）
-pwsh -File scripts/publish-webdavsharp.ps1
+# Windows（PowerShell 7，一次编 4 个包并自动裁剪 runtimes）
+pwsh -File scripts/publish-webdavsharp.ps1 -Runtime win-x64
+pwsh -File scripts/publish-webdavsharp.ps1 -Runtime win-arm64
+pwsh -File scripts/publish-webdavsharp.ps1 -Runtime linux-x64
+pwsh -File scripts/publish-webdavsharp.ps1 -Runtime linux-arm64
 ```
 
 `scripts/publish-webdavsharp.ps1` 需要 PowerShell 7（`pwsh`）；
@@ -68,6 +72,6 @@ Windows 上开发、Linux 上部署时不会因为 CRLF 产生噪音 diff。
 ## 已知未覆盖
 
 - 发布脚本仅 PowerShell 版（其他平台用 `dotnet publish`）
-- macOS / Linux 上尚未做真机端到端冒烟：当前实测平台为 Windows x64；
-  Linux x64 / linux-arm64 / osx-arm64 **发布物已逐 RID 验证**（原生库格式 + 框架脚本就位），
-  但未在真机上跑过请求链路。CI 加对应 runner 即可补齐。
+- Linux 上尚未做真机端到端冒烟：当前实测平台为 Windows x64；
+  linux-x64 / linux-arm64 包已编出但未在真机上跑过请求链路。
+  CI 加对应 runner 即可补齐。
