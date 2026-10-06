@@ -22,6 +22,7 @@
       这套覆盖 linux-arm64、osx-arm64、win-arm64、musl 等，树莓派/Apple Silicon 可用。
     -->
     <PackageReference Include="FreeSql.Provider.SqliteCore" Version="3.5.309" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.12" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />

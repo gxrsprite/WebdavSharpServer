@@ -12,6 +12,10 @@ using WebdavSharp.Server.WebDav;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Windows 服务形态：sc.exe / NSSM 启动时自动把 ContentRoot 锚到 exe 所在目录
+// （否则 CWD 是 System32，LocalPaths/数据库会写错地方）；控制台直接启动时无影响。
+builder.Host.UseWindowsService();
+
 // ---- Serilog：尽早接管，使启动期日志（含下方 Dav roots）也走 Serilog ----
 // 级别与 Console 输出模板来自 appsettings.json 的 "Serilog" 段；
 // **文件 sink 一律在代码里加**，路径锚到 ContentRoot（与 Dav 路径锚定一致）——
