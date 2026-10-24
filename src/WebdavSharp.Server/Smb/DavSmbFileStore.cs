@@ -573,6 +573,13 @@ public sealed class DavSmbFileStore(
                 {
                     FileName = Path.GetFileName(h.PhysicalPath),
                 },
+                // 记事本等应用打开文件时会查询 EA 信息；返回 INVALID_INFO_CLASS 会让
+                // Windows 客户端把整个打开判定为失败（报“系统找不到指定的文件”）。
+                // 本地文件没有扩展属性，按 NTFS 语义返回 EaSize=0 即可。
+                FileInformationClass.FileEaInformation => new FileEaInformation
+                {
+                    EaSize = 0,
+                },
                 _ => null!,
             };
             return result is null ? NTStatus.STATUS_INVALID_INFO_CLASS : NTStatus.STATUS_SUCCESS;
