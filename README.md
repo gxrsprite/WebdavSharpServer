@@ -2,13 +2,11 @@
 
 基于 .NET 10 的跨平台文件服务：**WebDAV + FTP + SMB** 三协议共用同一套用户 / 挂载 / 规则，自带轻量 **Blazor Server 管理后台**。
 
-> 权限语义参考 [hacdias/webdav](https://github.com/hacdias/webdav)（`permissions: CRUD`、按用户覆盖、`path` 前缀 / `regex` 规则"最后一条命中生效"、多虚拟挂载 `directories`）。
-
 ## 功能一览
 
 - **三协议一体**：WebDAV ✅ / FTP ✅ / SMB ✅（SMB1/2/3），共用 `dav_user`、`dav_mount`、`dav_rule` 三张表，规则可用 `Protocols` 列限定生效协议（空 = 全部协议）。
 - **虚拟挂载**：多个物理目录挂为虚拟根条目（如 `/NAS`、`/public`），也支持按用户设置主目录（与全局挂载互斥、优先）。
-- **权限模型**：`C` 创建 / `R` 读取 / `U` 更新 / `D` 删除，`none` 显式拒绝；适用规则按 `SortOrder` 从小到大、**最后一条命中生效**；`path` 前缀匹配，`regex` 全路径匹配；跨挂载 COPY/MOVE/DELETE 要求所有触及点都有权限。
+- **权限模型**：`C` 创建 / `R` 读取 / `U` 更新 / `D` 删除 / `V` 显示（列出目录或挂载项），`none` 显式拒绝；适用规则按 `SortOrder` 从小到大、**最后一条命中生效**；`path` 前缀匹配，`regex` 全路径匹配；跨挂载 COPY/MOVE/DELETE 要求所有触及点都有权限。
 - **管理后台**：手写轻量 Blazor Server（无 BootstrapBlazor 依赖），`/admin`：用户 / 角色 / 挂载 / 规则 / 服务开关 / 审计日志。
 - **安全**：PBKDF2-SHA256 存口令（SMB 另存 NT Hash 用于 NTLMv2）；改密/禁用递增 `AuthVersion` 使 Cookie 即时失效；暴力破解防护（同 IP+用户 5 分钟 5 次失败封 15 分钟，`429` + `Retry-After`）；审计日志（写操作全记、读操作只记失败）；健康探针 `/healthz`、`/readyz`。
 - **跨平台**：Windows / Linux（x64 + arm64，有现成发布包，见 [`docs/使用说明.md`](docs/使用说明.md)）；数据访问用 FreeSql ORM（第三方），SQLite 底层是微软官方驱动 `Microsoft.Data.Sqlite`（经 `FreeSql.Provider.SqliteCore`）+ `SQLitePCLRaw.bundle_e_sqlite3` 原生库（随包仅 win/linux 的 x64+arm64，macOS 等需外接 PostgreSQL/MySQL）。
