@@ -53,6 +53,10 @@ dotnet run --project src/WebdavSharp.Server
 - 跨平台部署：[`docs/cross-platform.md`](docs/cross-platform.md)
 - 协议共用模型：[`docs/protocols.md`](docs/protocols.md)
 
+## SMBLibrary 补丁
+
+SMB 服务基于 LGPL-3.0 的 SMBLibrary。为兼容 CX 文件管理器的 SMB1 RAP 共享枚举和空目录列举，本仓库在 `third_party/SMBLibrary` 中 vendored 上游 v1.5.7 并维护补丁，涉及 `NetShareEnum`、空目录 `FindFirst2` 返回语义和 NTLM 时间戳 AV Pair。补丁细节与上游同步说明见 [`third_party/SMBLibrary/README.webdavsharp.md`](third_party/SMBLibrary/README.webdavsharp.md)；分发时保留其许可证文件并遵循 LGPL-3.0。
+
 ## 构建、测试与发布
 
 ```powershell
