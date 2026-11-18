@@ -18,6 +18,16 @@ public sealed class DavServerOptions
     /// <summary>单根回退目录（未命中任何虚拟挂载时使用）。</summary>
     public string Directory { get; set; } = "LocalPaths/dav-root";
 
+    /// <summary>
+    /// 单请求请求体上限（字节）。0 = 不限制（默认）。
+    /// 背景：Kestrel 默认 <c>MaxRequestBodySize = 30_000_000</c>，超限时它在首次读
+    /// 请求体时抛 <c>BadHttpRequestException</c> 并直接中止连接——客户端只看到
+    /// "Connection reset"（Android/Java 客户端即 <c>java.io.IOException: Connection reset</c>），
+    /// 服务端日志里那条请求甚至还是 200（响应从未开始）。
+    /// 大文件上传必须放开，见 Program.cs 的 Kestrel Limits 配置。
+    /// </summary>
+    public long MaxUploadSizeBytes { get; set; }
+
     /// <summary>用户默认权限字母，如 R。大小写不敏感。</summary>
     public string DefaultPermissions { get; set; } = "R";
 
@@ -26,10 +36,14 @@ public sealed class DavServerOptions
 
     public DavCorsOptions Cors { get; set; } = new();
 
-    /// <summary>FreeSql DataType 名：Sqlite / PostgreSQL / MySql / SqlServer。</summary>
-    public string Database { get; set; } = "Sqlite";
+    /// <summary>FreeSql DataType 名：NovaDb / Sqlite / PostgreSQL / MySql / SqlServer。</summary>
+    public string Database { get; set; } = "NovaDb";
 
-    public string ConnectionString { get; set; } = "Data Source=LocalPaths/webdavsharp.db";
+    /// <summary>
+    /// 数据库连接串。NovaDb 嵌入模式是**目录**（如 <c>Data Source=LocalPaths/novadb</c>），
+    /// 不是单文件；SQLite 才是文件路径。
+    /// </summary>
+    public string ConnectionString { get; set; } = "Data Source=LocalPaths/novadb";
 
     /// <summary>开发环境自动按实体建表/更新表结构（生产关闭）。</summary>
     public bool AutoSyncStructure { get; set; }

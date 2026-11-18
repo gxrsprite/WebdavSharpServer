@@ -23,6 +23,20 @@
 - 健康探针（免认证）：`/healthz` 存活，`/readyz` 就绪（含 DB 可读检查，
   失败 `503`）。
 
+## 1.65 上传大小上限（`Dav:MaxUploadSizeBytes`）
+
+Kestrel 默认 `MaxRequestBodySize = 30_000_000` 字节（≈28.6 MiB）。超限时它在
+**首次读请求体**时抛 `BadHttpRequestException` 并直接中止连接，客户端侧只能看到
+`Connection reset`（Android/Java 客户端即 `java.io.IOException: Connection reset`），
+服务端那条请求日志还可能显示 `200`——响应根本没来得及开始。
+
+- 默认 `0` = 不限制（本服务由 Basic 认证 + 规则卡点保护，NAS 场景按需放开）。
+- 设成正数则作为**单请求**上限：中间件在 `IHttpMaxRequestBodySizeFeature` 上再卡一层，
+  超限返回 `413`（日志同时打一条 WRN 说明真实原因），不再表现为裸 reset。
+- 同时把 Kestrel 的 `MinRequestBodyDataRate` 放宽到 1 KB/s × 60s——默认 240 B/s × 5s
+  对手机端/弱网太紧，触发限速同样只是“连接被重置”，看不出区别。
+- 上传先落同目录 `.<文件名>.<随机>.part` 再原子改名：中途断线/超限不会把旧文件截断成半截。
+
 ## 1.5 委托认证（NoPassword）
 
 `Dav:NoPassword=true` 时 DAV Basic 只认用户名、不验口令（对齐 hacdias `noPassword`，
@@ -35,8 +49,8 @@
 ## 2. 本地开发数据（不入库）
 
 - `LocalPaths/dav-root/` — 真实文件根（含示例 `public/`）。
-- `LocalPaths/webdavsharp.db` — SQLite 库（根 `.gitignore` 的 `*.db` 已排除）。
-- 参考项目本地克隆放 `artifacts/reference/`（如 hacdias/webdav 对照），不入库。
+- `LocalPaths/novadb/` — NovaDb 默认数据库目录（根 `.gitignore` 已排除）。
+- `LocalPaths/webdavsharp.db` — 旧 SQLite 库（若有，用于回滚或手动迁移；不自动导入）。
 
 ## 1.7 日志（Serilog）
 

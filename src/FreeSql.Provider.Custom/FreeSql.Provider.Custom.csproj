@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    FreeSql.Provider.Custom 的 NovaDb 兼容分支（vendored + 补丁）。
+    - 上游：dotnetcore/FreeSql@master（同步基线 3.5.309），见 README.md。
+    - AssemblyName 必须保持 FreeSql.Provider.Custom：FreeSql 内核按
+      "FreeSql.Custom.MySql.CustomMySqlProvider`1,FreeSql.Provider.Custom"
+      反射加载 DataType.CustomMySql 的实现，改名即无法解析。
+    - 本分支只保留 base + MySql 方言（Custom / CustomMySql 两个 DataType 可用）；
+      Oracle / SqlServer / PostgreSQL 方言文件未引入，对应 DataType 不可用。
+    - 引用方：一律 ProjectReference 本工程，不要再引用官方
+      FreeSql.Provider.Custom NuGet 包（程序集同名会冲突）。
+  -->
+
+  <PropertyGroup>
+    <AssemblyName>FreeSql.Provider.Custom</AssemblyName>
+    <RootNamespace>FreeSql.Custom</RootNamespace>
+    <Description>FreeSql 自定义适配（NovaDb 兼容分支）：基于官方 CustomMySql 方言，适配 NewLife.NovaDb 的 SQL 子集。</Description>
+    <Version>3.5.309.1</Version>
+    <SignAssembly>false</SignAssembly>
+    <IsPackable>false</IsPackable>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <!-- vendored 上游源码：关闭文档文件，避免缺注释告警刷屏 -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 与全仓 FreeSql 主包同版本（见 Directory.Packages/Server csproj 约定） -->
+    <PackageReference Include="FreeSql" Version="3.5.309" />
+  </ItemGroup>
+
+</Project>

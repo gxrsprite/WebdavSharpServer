@@ -1,8 +1,10 @@
 using System.Runtime.InteropServices;
 using System.Security.Claims;
 using FmiSrl.FtpServer.Server.DependencyInjection;
+using FreeSql.Custom;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Options;
+using NewLife.NovaDb.Client;
 using Serilog;
 using WebdavSharp.Core.Entities;
 using WebdavSharp.Core.Services;
@@ -12,8 +14,8 @@ using WebdavSharp.Server.WebDav;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Windows 服务形态：sc.exe / NSSM 启动时自动把 ContentRoot 锚到 exe 所在目录
-// （否则 CWD 是 System32，LocalPaths/数据库会写错地方）；控制台直接启动时无影响。
+// Windows 服务模式：被 SCM 启动时向服务管理器报到（否则 30 秒后 7009 超时被杀），
+// 控制台/前台运行时为 no-op。
 builder.Host.UseWindowsService();
 
 // ---- Serilog：尽早接管，使启动期日志（含下方 Dav roots）也走 Serilog ----
@@ -59,14 +61,27 @@ static void AnchorDavPaths(string root, DavServerOptions o)
             o.ConnectionString = $"Data Source={dbPath}";
         }
     }
+    else if (o.Database.Equals("NovaDb", StringComparison.OrdinalIgnoreCase))
+    {
+        // NovaDb 嵌入模式的 Data Source 是**目录**（不是单文件）：锚定并建目录。
+        var m = System.Text.RegularExpressions.Regex.Match(o.ConnectionString, @"Data Source=(?<p>[^;]+)");
+        if (m.Success)
+        {
+            var dbDir = Abs(root, m.Groups["p"].Value.Trim());
+            Directory.CreateDirectory(dbDir);
+            o.ConnectionString = $"Data Source={dbDir}";
+        }
+    }
     Directory.CreateDirectory(o.Directory);
 }
 
 static string Abs(string root, string p) => Path.IsPathRooted(p) ? p : Path.GetFullPath(Path.Combine(root, p));
 
-// ---- FreeSql（SQLite 默认；生产切 PG/MySQL 只改 Dav:Database + 连接串） ----
+// ---- FreeSql（默认 NovaDb；Sqlite/PG/MySQL 只改 Dav:Database + 连接串） ----
+var isNovaDb = dav.Database.Equals("NovaDb", StringComparison.OrdinalIgnoreCase);
 var dataType = dav.Database.ToLowerInvariant() switch
 {
+    "novadb" => FreeSql.DataType.CustomMySql,
     "postgresql" or "pgsql" => FreeSql.DataType.PostgreSQL,
     "mysql" => FreeSql.DataType.MySql,
     "sqlserver" => FreeSql.DataType.SqlServer,
@@ -94,12 +109,28 @@ if (dataType == FreeSql.DataType.Sqlite)
     }
 }
 
-var fsql = new FreeSql.FreeSqlBuilder()
-    .UseConnectionString(dataType, dav.ConnectionString)
-    .UseAutoSyncStructure(dav.AutoSyncStructure)
-    .Build();
+var fsql = isNovaDb
+    ? BuildNovaDb(dav)
+    : new FreeSql.FreeSqlBuilder()
+        .UseConnectionString(dataType, dav.ConnectionString)
+        .UseAutoSyncStructure(dav.AutoSyncStructure)
+        .Build();
 builder.Services.AddSingleton<IFreeSql>(fsql);
 builder.Services.AddSingleton<PasswordHasher>();
+
+// ---- NovaDb（嵌入模式）：经本仓改写的 CustomMySql 方言分支接入 ----
+// 方言补丁见 src/FreeSql.Provider.Custom/README.md。factory 每次取连接时 new 一个
+// NovaConnection（嵌入模式共享进程内 SqlEngine，关闭连接不丢数据，可放心短连）。
+static IFreeSql BuildNovaDb(DavServerOptions dav)
+{
+    var connectionString = dav.ConnectionString;
+    var fsql = new FreeSql.FreeSqlBuilder()
+        .UseConnectionFactory(FreeSql.DataType.CustomMySql, () => new NovaConnection(connectionString))
+        .UseAutoSyncStructure(dav.AutoSyncStructure)
+        .Build();
+    fsql.SetDbProviderFactory(NovaClientFactory.Instance);
+    return fsql;
+}
 builder.Services.AddScoped<DavAuthService>();
 builder.Services.AddSingleton<WebdavSharp.Server.WebDav.DavLockManager>();
 builder.Services.AddSingleton<WebdavSharp.Server.WebDav.DavBruteForceGuard>();
@@ -168,6 +199,24 @@ builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
             policy.AllowCredentials();
     }
 }));
+
+// ---- Kestrel 请求体上限：默认 30,000,000 字节会把大文件上传直接掐断 ----
+// 超限时 Kestrel 在首次读请求体时抛 BadHttpRequestException 并 abort 连接，
+// 客户端侧只能看到 "Connection reset"，服务端那条请求日志还显示 200
+// （响应从未开始，finally 回落到 Response.StatusCode 的隐式默认值）。
+// 这里按 Dav:MaxUploadSizeBytes 放开（0 = 不限制）。
+builder.WebHost.ConfigureKestrel(o =>
+{
+    o.Limits.MaxRequestBodySize = dav.MaxUploadSizeBytes > 0 ? dav.MaxUploadSizeBytes : null;
+
+    // 手机端 / 弱网 / 单线程客户端上传时常有几十秒的速率低谷，Kestrel 默认
+    // 240 B/s × 5s 宽限太紧，触发 "request body data rate too low" 同样是
+    // 连接被重置（客户端还是 Connection reset，看不出区别）。
+    var minRate = new Microsoft.AspNetCore.Server.Kestrel.Core.MinDataRate(
+        bytesPerSecond: 1024, gracePeriod: TimeSpan.FromSeconds(60));
+    o.Limits.MinRequestBodyDataRate = minRate;
+    o.Limits.MinResponseDataRate = minRate;
+});
 
 builder.WebHost.UseUrls($"http://{dav.Address}:{dav.Port}");
 

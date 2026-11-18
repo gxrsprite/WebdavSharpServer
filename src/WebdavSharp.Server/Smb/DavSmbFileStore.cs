@@ -160,8 +160,7 @@ public sealed class DavSmbFileStore(
             if (nonDirRequested && physicalIsDir)
                 return (NTStatus.STATUS_FILE_IS_A_DIRECTORY, handle, fileStatus);
 
-            // 创建语义（MS-SMB2 3.3.5.9）：
-            //   SUPERSEDE / CREATE / OPEN_IF / OVERWRITE_IF 都可能新建
+            // 创建语义（MS-SMB2 3.3.5.9）：SUPERSEDE / CREATE / OPEN_IF / OVERWRITE_IF 都可能新建
             var mayCreate = createDisposition is CreateDisposition.FILE_SUPERSEDE
                 or CreateDisposition.FILE_CREATE
                 or CreateDisposition.FILE_OPEN_IF
@@ -173,7 +172,7 @@ public sealed class DavSmbFileStore(
                 logger.LogInformation("SMB CreateFile 目标已存在（FILE_CREATE）：{Path}", virtualPath);
                 return (NTStatus.STATUS_OBJECT_NAME_COLLISION, handle, fileStatus);
             }
-            // OPEN / OVERWRITE 要求目标必须已存在（否则按规范回 NOT_FOUND）
+            // OPEN / OVERWRITE 要求目标必须已存在
             if (!exists && createDisposition is CreateDisposition.FILE_OPEN or CreateDisposition.FILE_OVERWRITE)
                 return (NTStatus.STATUS_OBJECT_NAME_NOT_FOUND, handle, fileStatus);
 
@@ -237,16 +236,14 @@ public sealed class DavSmbFileStore(
                     if (!string.IsNullOrEmpty(parent))
                         Directory.CreateDirectory(parent);
 
-                    // 截断语义（MS-SMB2 / MS-CIFS）：SUPERSEDE / OVERWRITE / OVERWRITE_IF
-                    // 命中已存在文件时长度必须归零。否则客户端写入较短内容后旧尾部残留，
-                    // 表现为"覆盖不干净 / 覆盖失败"；OPEN_IF 的语义是"打开"，不能截断。
+                    // SUPERSEDE / OVERWRITE / OVERWRITE_IF 命中已存在文件时都要截断，
+                    // 否则客户端写入较短内容且不补发 EOF 时，旧尾部会残留。
                     var truncate = createDisposition is CreateDisposition.FILE_SUPERSEDE
                         or CreateDisposition.FILE_OVERWRITE
                         or CreateDisposition.FILE_OVERWRITE_IF;
-
-                    var mode = !exists
-                        ? FileMode.CreateNew
-                        : truncate && wantsWrite ? FileMode.Truncate : FileMode.Open;
+                    var mode = exists && truncate && wantsWrite
+                        ? FileMode.Truncate
+                        : exists ? FileMode.Open : FileMode.CreateNew;
 
                     var fileAccess = wantsWrite
                         ? (wantsRead ? FileAccess.ReadWrite : FileAccess.Write)
@@ -261,15 +258,9 @@ public sealed class DavSmbFileStore(
                     result.Stream = new FileStream(loc.PhysicalPath, mode, fileAccess,
                         FileShare.ReadWrite | FileShare.Delete);
                     fileStatus = exists ? FileStatus.FILE_OPENED : FileStatus.FILE_CREATED;
-
-                    logger.LogDebug(
-                        "SMB CreateFile OK：path={Path} disp={Disp} access=0x{Mask:X} exists={Exists} truncate={Truncate}",
-                        virtualPath, createDisposition, (uint)desiredAccess, exists, truncate);
                 }
                 catch (IOException ex) when (IsSharingViolation(ex))
                 {
-                    // 本地有进程独占持有该文件：回 SHARING_VIOLATION，Windows 才会显示
-                    // "文件正在使用"并按协议重试；回 ACCESS_DENIED 会被当成权限问题。
                     logger.LogInformation("SMB 打开文件共享冲突：{Path}（HResult=0x{HResult:X}）",
                         loc.PhysicalPath, ex.HResult);
                     return (NTStatus.STATUS_SHARING_VIOLATION, handle, fileStatus);
@@ -392,11 +383,7 @@ public sealed class DavSmbFileStore(
     private static string h0(object handle) => handle is Handle h ? h.PhysicalPath : "?";
 
     /// <summary>Win32 ERROR_SHARING_VIOLATION(32) / ERROR_LOCK_VIOLATION(33) 判定。</summary>
-    private static bool IsSharingViolation(IOException ex)
-    {
-        var code = ex.HResult & 0xFFFF;
-        return code is 32 or 33;
-    }
+    private static bool IsSharingViolation(IOException ex) => (ex.HResult & 0xFFFF) is 32 or 33;
 
     // ---------- 目录列举 ----------
 

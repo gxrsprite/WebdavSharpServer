@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using SMBLibrary;
 using SMBLibrary.Authentication.GSSAPI;
 using SMBLibrary.Server;
+using Utilities;
 using SMBLibrary.Services;
 using WebdavSharp.Core.Entities;
 using WebdavSharp.Core.Services;
@@ -138,10 +139,26 @@ public sealed class DavSmbHostedService(
             CachingPolicy.NoCaching));
         logger.LogInformation("SMB IPC$ 共享已注册：srvsvc 可枚举 {Count} 个共享", mounts.Count);
 
+        // MT 管理器用 Tree Connect 一个固定名字的伪共享来探测服务器可达性，
+        // 探测失败会退避约 60 秒（下载卡在 99% 很久才完成）。放行树连接、
+        // 拒绝一切文件操作；不加入 srvsvc 枚举，对其他客户端不可见。
+        shares.Add(new FileSystemShare(
+            "MT_PING$",
+            new MtPingFileStore(services.GetRequiredService<ILogger<MtPingFileStore>>()),
+            CachingPolicy.NoCaching));
+        logger.LogInformation("SMB MT_PING$ 探测共享已注册（仅 Tree Connect 放行）");
+
         var gss = new GSSProvider(new DavNtlmMechanism(
             access, services.GetRequiredService<ILogger<DavNtlmMechanism>>(), _dav.SmbServerName));
 
         _server = new SMBServer(shares, gss);
+        // SMBLibrary 内部日志（连接重置/无效报文等 Warning 级）转接到 Serilog，
+        // 便于排查客户端连接被静默断开的问题。
+        _server.LogEntryAdded += (_, e) =>
+        {
+            if (e.Severity <= Severity.Warning)
+                logger.LogWarning("SMBLib[{Severity}]: {Message}", e.Severity, e.Message);
+        };
 
         var addressText = string.IsNullOrWhiteSpace(s.Address) ? _dav.Address : s.Address;
         var address = ParseAddress(addressText);

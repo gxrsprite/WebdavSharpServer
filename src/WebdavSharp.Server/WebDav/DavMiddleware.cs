@@ -1,6 +1,7 @@
 using System.Net;
 using System.Security;
 using System.Text;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Options;
 using WebdavSharp.Core.Entities;
 using WebdavSharp.Core.Services;
@@ -235,8 +236,14 @@ public sealed class DavMiddleware(
                 }
                 Directory.CreateDirectory(Path.GetDirectoryName(physical)!);
                 var existed = File.Exists(physical);
-                await using (var fs = File.Create(physical))
-                    await http.Request.Body.CopyToAsync(fs);
+                // 逐请求上限：IHttpMaxRequestBodySizeFeature 只能在请求体开始读取之前改，
+                // 读起来之后再赋值会抛 InvalidOperationException。
+                if (_dav.MaxUploadSizeBytes > 0 &&
+                    http.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } sizeFeature)
+                {
+                    sizeFeature.MaxRequestBodySize = _dav.MaxUploadSizeBytes;
+                }
+                await AcceptPutAsync(http, physical, logger);
                 http.Response.StatusCode = existed ? StatusCodes.Status204NoContent : StatusCodes.Status201Created;
                 return;
 
@@ -433,7 +440,15 @@ public sealed class DavMiddleware(
         finally
         {
             var elapsedMs = System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-            var status = finalStatus != 0 ? finalStatus : http.Response.StatusCode;
+            // 注意这里不能用 Response.HasStarted 判断：本中间件就是末环，finally 跑在
+            // 管道返回之前，Kestrel 还没 flush 响应头，HasStarted 永远 false。
+            // 客户端提前断开 / 被 Kestrel 中止（请求体超限就是这条路径）时，
+            // OnStarting 不会触发且 RequestAborted 已取消——记 499，别把故障伪装成 200。
+            var status = finalStatus != 0
+                ? finalStatus
+                : http.RequestAborted.IsCancellationRequested
+                    ? StatusCodes.Status499ClientClosedRequest
+                    : http.Response.StatusCode;
             logger.LogInformation("DAV {Method} {Path} {User} {Ip} → {Status} ({Elapsed:0}ms)",
                 auditMethod, auditPath, auditUser, clientIp, status, elapsedMs);
             await WriteAuditAsync(http, fsql, auditMethod, auditPath, auditUser, status);
@@ -444,14 +459,14 @@ public sealed class DavMiddleware(
         ["PUT", "MKCOL", "DELETE", "COPY", "MOVE", "LOCK", "UNLOCK", "PROPPATCH"];
 
     /// <summary>
-    /// 审计落库：变更动词全记；读动词只记失败（401/403/409/412/423/5xx）。
+    /// 审计落库：变更动词全记；读动词只记失败（401/403/409/412/413/423/429/499/5xx）。
     /// 失败不影响请求（best-effort）。
     /// </summary>
     private static async Task WriteAuditAsync(
         HttpContext http, IFreeSql fsql, string method, string rulePath, string username, int status)
     {
         var isMutation = AuditedMethods.Contains(method);
-        var isFailure = status is 401 or 403 or 409 or 412 or 423 or 429 || status >= 500;
+        var isFailure = status is 401 or 403 or 409 or 412 or 413 or 423 or 429 or 499 || status >= 500;
         if (!isMutation && !isFailure)
             return;
         try
@@ -476,6 +491,86 @@ public sealed class DavMiddleware(
     }
 
     // ---------- 内部辅助 ----------
+
+    /// <summary>
+    /// 把 PUT 请求体落到目标文件。
+    /// 先写同目录临时文件再原子改名：<see cref="File.Create(string)"/> 会先截断目标文件，
+    /// 上传中途一断（超限 413 / 客户端断开 / 写盘失败）旧文件就被半截内容毁掉。
+    /// 各失败分支都要删临时文件并把真实原因写进日志——否则客户端只有
+    /// "Connection reset"，服务端一条线索都没有（这正是 30MB 默认上限那次的表现）。
+    /// </summary>
+    private static async Task AcceptPutAsync(HttpContext http, string physical, ILogger logger)
+    {
+        var temp = Path.Combine(
+            Path.GetDirectoryName(physical)!,
+            $".{Path.GetFileName(physical)}.{Guid.CreateVersion7().ToString("N")[..8]}.part");
+        try
+        {
+            await using (var fs = new FileStream(temp, FileMode.CreateNew, FileAccess.Write,
+                FileShare.None, bufferSize: 128 * 1024, useAsync: true))
+            {
+                await http.Request.Body.CopyToAsync(fs, http.RequestAborted);
+            }
+            File.Move(temp, physical, overwrite: true);
+        }
+        catch (BadHttpRequestException ex) when (ex.StatusCode == StatusCodes.Status413PayloadTooLarge)
+        {
+            DeleteQuietly(temp);
+            logger.LogWarning(
+                "PUT {Path} 被拒：{Message}（放开上限请设 Dav:MaxUploadSizeBytes=0 或目标字节数）",
+                physical, ex.Message);
+            http.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
+            await TryWriteAsync(http);
+        }
+        catch (OperationCanceledException) when (http.RequestAborted.IsCancellationRequested)
+        {
+            DeleteQuietly(temp);
+            logger.LogWarning("PUT {Path} 客户端上传中途断开，已清理临时文件", physical);
+        }
+        catch (IOException ex)
+        {
+            DeleteQuietly(temp);
+            // 客户端侧断开在 Kestrel 里也可能表现为 IOException（写入已关闭的 socket），
+            // 只要请求已取消就按“断开”记，别误报成磁盘故障。
+            if (http.RequestAborted.IsCancellationRequested)
+            {
+                logger.LogWarning("PUT {Path} 连接中断：{Message}", physical, ex.Message);
+                return;
+            }
+            logger.LogError(ex, "PUT {Path} 写盘失败", physical);
+            http.Response.StatusCode = StatusCodes.Status500InternalServerError;
+            await TryWriteAsync(http);
+        }
+    }
+
+    /// <summary>尽力写一小段响应正文；连接已被 Kestrel 中止时静默放弃。</summary>
+    private static async Task TryWriteAsync(HttpContext http)
+    {
+        try
+        {
+            if (!http.Response.HasStarted)
+                await http.Response.WriteAsync(http.Response.StatusCode == StatusCodes.Status413PayloadTooLarge
+                    ? "Payload Too Large"
+                    : "Internal Server Error");
+        }
+        catch
+        {
+            // 连接已 RST，写不出去属正常
+        }
+    }
+
+    private static void DeleteQuietly(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch
+        {
+            // 清理失败不影响响应
+        }
+    }
 
     /// <summary>
     /// 单区间 Range 支持（RFC 9110 §14）。多区间与 If-Range 暂不实现（返回 200 全量，

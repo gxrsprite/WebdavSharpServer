@@ -76,11 +76,15 @@ public class DavRole
 
 /// <summary>用户—角色多对多关联。</summary>
 [Table(Name = "dav_user_role")]
+[Index("ux_dav_user_role", nameof(UserId) + "," + nameof(RoleId), true)]
 public class DavUserRole
 {
+    // NovaDb 没有复合主键（PRIMARY KEY (a,b) 会直接报解析错），用代理主键；
+    // (UserId, RoleId) 唯一性改由唯一索引保证（见 Index attribute）。
     [Column(IsPrimary = true)]
+    public Guid Id { get; set; } = Guid.CreateVersion7();
+
     public Guid UserId { get; set; }
 
-    [Column(IsPrimary = true)]
     public Guid RoleId { get; set; }
 }

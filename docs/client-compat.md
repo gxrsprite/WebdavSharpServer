@@ -72,6 +72,28 @@ OPTIONS / PROPFIND(0,1,infinity) / GET / PUT / MKCOL / DELETE /
 COPY·MOVE（文件+集合）/ LOCK·UNLOCK·423 / Overwrite:F→412 /
 Basic 401 / Cookie 管理后台 200 —— 全部通过。
 
+## 大文件上传报 `Connection reset`（Android 混淆客户端，2026-10-31 定位并修复）
+
+现象：PUT 上传 >30 MB 的文件时客户端抛
+`java.io.IOException: Connection reset` / `sun.net.ConnectionResetException`，
+服务端访问日志那条 PUT 甚至显示 `200`（耗时仅几十毫秒）。
+
+根因：**Kestrel 默认 `MaxRequestBodySize = 30_000_000`**。超限时它在
+`Http1ContentLengthMessageBody.OnReadStarting` 抛
+`BadHttpRequestException: Request body too large` 并 abort 连接——响应还没开始，
+所以 `OnStarting` 没触发，finally 回落到 `Response.StatusCode` 的隐式默认值 `200`，
+把故障伪装成成功。客户端此时正在往已 RST 的 socket 写数据，只能看到 Connection reset。
+
+修复（已合入）：
+1. `Dav:MaxUploadSizeBytes`（默认 `0` = 不限制）驱动 `KestrelServerLimits.MaxRequestBodySize`；
+2. 中间件对 PUT 再按该值设 `IHttpMaxRequestBodySizeFeature`，超限回 `413` 并打 WRN；
+3. PUT 先写 `.<文件名>.<随机>.part` 再原子 `File.Move`，中断不再截断旧文件；
+4. 访问日志：`OnStarting` 未触发且 `RequestAborted` 已取消 → 记 `499`，不再显示假 200。
+
+验证：`curl -T 45MB` → `201`/`204`，PROPFIND 回读 `getcontentlength` 一致；
+临时把上限设 10 MB 再传 45 MB → 客户端拿到 `413`（不再是无状态码 reset），日志有
+`PUT ... 被拒：Request body too large. The max request body size is 10000000 bytes.`
+
 ## 待测
 
 - MS Office（Word/Excel）保存链路：LOCK → PUT → UNLOCK 序列（服务端已实现真锁，
