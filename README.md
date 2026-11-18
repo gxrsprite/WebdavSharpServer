@@ -35,10 +35,21 @@ dotnet run --project src/WebdavSharp.Server
 - `path` 使用前缀匹配，`regex` 对完整虚拟路径匹配。
 - 详见 [`docs/permission-model.md`](docs/permission-model.md)。
 
-## 客户端与说明
+## 客户端兼容性（实测）
 
-- Windows 资源管理器、Android 文件管理器等 WebDAV / FTP / SMB 客户端说明：[`docs/client-compat.md`](docs/client-compat.md)
+| 客户端 | 协议与验证结果 |
+|---|---|
+| Windows 资源管理器 / MiniRedir | WebDAV、SMB、FTP 连接及基本文件操作通过；WebDAV 映射需启用 `BasicAuthLevel=2` |
+| CX 文件管理器（Android） | SMB1：认证、共享枚举、列目录、读写、改名、删除通过 |
+| MT 管理器（Android） | SMB、WebDAV、FTP 连接及列目录、上传、下载通过 |
+| ES 文件管理器（Android） | SMB、WebDAV、FTP 连接及列目录、上传、下载通过 |
+
+更多实测环境、协议操作矩阵、客户端注意事项与待测列表见 [`docs/client-compat.md`](docs/client-compat.md)。
+
+## 文档
+
 - 管理后台与生产部署：[`docs/admin-guide.md`](docs/admin-guide.md)
+- 权限模型：[`docs/permission-model.md`](docs/permission-model.md)
 - 跨平台部署：[`docs/cross-platform.md`](docs/cross-platform.md)
 - 协议共用模型：[`docs/protocols.md`](docs/protocols.md)
 
