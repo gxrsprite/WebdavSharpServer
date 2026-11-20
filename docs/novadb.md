@@ -106,15 +106,29 @@ FreeSql（本仓分支）发射 → Nova 执行：
 { "Dav": { "Database": "Sqlite", "ConnectionString": "Data Source=LocalPaths/webdavsharp.db" } }
 ```
 
-## 可向上游提的 issue（实测缺口，都有最小复现）
+## 上游缺口与建议（按严重性分级，均有最小复现）
 
-1. `BIT` 类型别名（`bit(1)` → Boolean），FreeSql/主流 ORM 开箱即用。
-2. `LIMIT m,n` 逗号分页（MySQL 兼容）。
-3. 容忍 `` `库`.`表` `` / ``.`表` `` 空限定符（单库直接忽略库名）。
-4. `LOCATE()` / `CHAR_LENGTH()` 别名（已有 `INSTR()` / `LENGTH()`）。
-5. `CHANGE COLUMN` / `RENAME TABLE`（CodeFirst 改名迁移需要）。
-6. `information_schema.columns.EXTRA` 暴露 `auto_increment`。
-7. `UTC_TIMESTAMP()`（或文档注明用 `NOW()` + 客户端换算）。
-8. 系统视图上单引号别名 `'xxx'` 的“without a row context”报错。
-9. `CompareValues` 的 bool↔数字隐转（`bool列 = 1` 恒 false 非常反直觉）。
-10. `FOR UPDATE`（不支持就是解析时报错，行为明确，够用了）。
+### 一、硬缺口：改 SQL 也绕不过去（真正需要上游修的 issue）
+
+1. `CHANGE COLUMN` / `RENAME TABLE` —— DDL 改名迁移做不到，CodeFirst 改列/改表名直接 loud fail。
+2. `FOR UPDATE` —— 不支持，解析即报错，没有行锁语义。
+3. 三参数 `IndexOf` —— 直接抛 `NotSupportedException`。
+4. 自增列元数据 `information_schema.columns.EXTRA` 恒空 —— 拿不到 `AUTO_INCREMENT` 标记（本仓实体无自增列，暂不受影响）。
+5. `DbFirst` 反向工程 —— 内省 SQL 含 `LOCATE` 等，在 Nova 上报错，本仓分支未移植验证（本仓不用 DbFirst）。
+
+### 二、行为差异：本仓已绕过，但属引擎行为缺陷（值得报）
+
+6. `CompareValues` 的 bool↔数字隐转 —— `bool列 = 1` 恒 false，非常反直觉（本仓内联 `TRUE/FALSE` 绕过）。
+7. 系统视图单引号别名 `'xxx'` —— 报 “without a row context”（本仓去掉别名绕过）。
+8. 反斜杠字面量 —— Nova 只有 `''` 转义，无 MySQL 的 `\\` 加倍（本仓已去掉加倍，否则 Windows 路径入库出错）。
+9. `LENGTH()` 按字符计（MySQL 按字节）—— 中文 `Length` 查询语义不同（本仓暂无此类查询）。
+
+### 三、建议级：语法糖/兼容性，本仓已打补丁绕过（提给上游只为少打补丁、生态更友好）
+
+10. `BIT` 类型别名（`bit(1)` → Boolean），FreeSql/主流 ORM 开箱即用。
+11. `LIMIT m,n` 逗号分页（MySQL 兼容）。
+12. 容忍 `` `库`.`表` `` / ``.`表` `` 空限定符（单库直接忽略库名）。
+13. `LOCATE()` / `CHAR_LENGTH()` 别名（已有 `INSTR()` / `LENGTH()`）。
+14. `UTC_TIMESTAMP()`（可用 `NOW()` + 客户端换算）。
+
+各条补丁位置见 [`src/FreeSql.Provider.Custom/README.md`](../src/FreeSql.Provider.Custom/README.md) 的 `NOVA:` 标记。
