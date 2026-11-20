@@ -1,15 +1,20 @@
 # NovaDb（默认数据库）
 
-本仓默认库已从 SQLite 切换为
+本仓默认库是
 [NewLife.NovaDb](https://github.com/NewLifeX/NewLife.NovaDb)
 （纯 C# 嵌入式/服务双模数据库，关系 + 时序 + MQ + KV 四引擎）。
-实测基线：`NewLife.NovaDb 1.0.2026.901`，嵌入模式。
+实测基线：**`NewLife.NovaDb 1.0.2026.1120-beta1409`**（2026-11-20 构建），嵌入模式。
 FreeSql 经本仓改写的 `CustomMySql` 方言分支接入，
-补丁清单见 [`src/FreeSql.Provider.Custom/README.md`](../src/FreeSql.Provider.Custom/README.md）。
+补丁清单见 [`src/FreeSql.Provider.Custom/README.md`](../src/FreeSql.Provider.Custom/README.md)。
 
-## 为什么换
+> 版本选择：1024 稳定版不含 MySQL 方言兼容修复；1120-beta 才包含 master 上
+> 11/20 那批提交（`LIMIT m,n`、`库.表`、BIT、`LOCATE/CHAR_LENGTH`、
+> `CHANGE COLUMN/RENAME TABLE`、内联索引、bool 0/1、规范类型名等），
+> 这些直接消掉了本仓大部分补丁。等上游出稳定版后换版本号重跑测试即可。
 
-| 维度 | SQLite（旧默认） | NovaDb（新默认） |
+## 为什么用 NovaDb
+
+| 维度 | SQLite（旧默认） | NovaDb |
 |---|---|---|
 | 原生依赖 | `e_sqlite3` 各 RID 原生库（`Batteries_V2.Init()`，fail fast） | **纯托管，零原生依赖**，arm64 / musl / 受限环境开箱即用 |
 | 存储形态 | 单文件 `*.db` | **目录即库**（每表 `.data/.idx/.wal` 文件组） |
@@ -17,7 +22,7 @@ FreeSql 经本仓改写的 `CustomMySql` 方言分支接入，
 | 并发模型 | 文件锁，写串行 | MVCC（Read Committed），读写分离友好 |
 | 网络模式 | 无（SQLite 专属） | 同一套 `NovaConnection` 切 `Server=` 即走 TCP，未来多实例可切服务模式 |
 | 成熟度 | 久经考验 | **v1 新引擎**，SQL 仅常用子集（本仓用量已全覆盖实测） |
-| ORM | 官方 `SqliteCore` provider | 本仓分支（二三十处小补丁，有单测锁定） |
+| ORM | 官方 `SqliteCore` provider | 本仓分支（6 组补丁，有单测锁定） |
 
 一句话：用“新引擎的小补丁成本”换“零原生依赖 + 目录即库 + 未来的服务模式”。
 `Sqlite` / `PostgreSQL` / `MySql` 仍可切回去（见下）。
@@ -54,27 +59,29 @@ fsql.SetDbProviderFactory(NovaClientFactory.Instance);
 （仍走 `FreeSql.Provider.SqliteCore` + `Batteries_V2.Init()`，代码保留双轨）。
 生产 PG/MySQL 不变。
 
-## SQL 兼容矩阵（实测，11 轮探针）
+## SQL 兼容矩阵（1120-beta 实测）
 
 FreeSql（本仓分支）发射 → Nova 执行：
 
 | 形状 | 结论 |
 |---|---|
-| `SELECT/WHERE/ORDER BY/GROUP BY/HAVING/LIMIT n OFFSET m`、反引号/双引号标识符、`@param` 参数 | ✅ |
-| `INSERT/UPDATE/DELETE`（内联字面量）、`ON DUPLICATE KEY UPDATE` | ✅ |
+| `SELECT/WHERE/ORDER BY/GROUP BY/HAVING`、反引号/双引号标识符、`@param` 参数 | ✅ |
+| `LIMIT n`、`LIMIT n OFFSET m`、**`LIMIT m,n` 逗号分页** | ✅（1120 起上游支持逗号形式，分支已恢复原样生成） |
+| `` `库`.`表` `` 与 `` .`表` `` 限定 | ✅（1120 起上游兼容，分支已删去限定符补丁） |
+| `INSERT/UPDATE/DELETE`（内联字面量）、`ON DUPLICATE KEY UPDATE`、多语句 | ✅ |
 | `COUNT/SUM/AVG/MIN/MAX`、`INNER/LEFT/RIGHT JOIN`、子查询 `IN/EXISTS` | ✅ |
-| `LIKE`（大小写不敏感）、`INSTR`、`CONCAT`、`IFNULL/COALESCE`、`CASE WHEN`、`CAST` | ✅ |
-| `CREATE TABLE`（`varchar/int(11)/char(36)/datetime(3)`、 backtick、COMMENT、`Engine=InnoDB`、`AUTO_INCREMENT`） | ✅（分支已剥离行内索引） |
-| `ALTER TABLE ADD/MODIFY COLUMN/COMMENT`、`CREATE/DROP INDEX x ON t`、`TRUNCATE` | ✅ |
-| `NOW()/YEAR()/DATEADD()/DATE_FORMAT()/LAST_INSERT_ID()` 等 60+ 函数 | ✅（分支重写了 `date_add/char_length/locate` 等） |
-| `limit m,n` 逗号分页 | ❌ Nova 拒收 → 分支改写为 `LIMIT n OFFSET m` |
-| `` `库`.`表` `` 两段限定 | ❌ Nova 拒收 → 分支直接去限定符（单库，无损） |
-| `BIT` 类型 | ❌ → 分支 bool 映射改 `BOOL` |
-| `bool列 = 1` | ❌（Nova 不做 bool↔数字隐转）→ 分支内联 `TRUE/FALSE` |
-| 复合主键 `PRIMARY KEY (a,b)`、表内 `UNIQUE INDEX` | ❌ → `DavUserRole` 改代理主键；分支剥离行内索引转独立 `CREATE INDEX` |
-| 系统视图单引号别名（`'xxx'`） | ❌（解析 quirk）→ 内省 SQL 已去别名 |
-| `utc_timestamp()`、`FOR UPDATE`、`CHANGE COLUMN`、`RENAME TABLE`、三参数 `IndexOf` | ❌ 用到即 loud fail（本仓查询已全部规避） |
-| 反斜杠字面量加倍（MySQL 式 `\\`） | ❌（Nova 无此转义）→ 分支已去掉，否则 Windows 路径入库翻倍 |
+| `LIKE`、`INSTR`、**`LOCATE`（含三参数）**、**`CHAR_LENGTH`**、`CONCAT`、`IFNULL/COALESCE`、`CASE WHEN`、`CAST` | ✅ |
+| **`BIT(1)` 布尔列**、列级 `UNIQUE`、`UNSIGNED/COLLATE/ON UPDATE` 修饰符、索引前缀长度 | ✅（1120 起） |
+| `CREATE TABLE`（`varchar/int/char/datetime`、backtick、COMMENT、`Engine=InnoDB`、`AUTO_INCREMENT`、**内联 `INDEX/UNIQUE INDEX`**） | ✅（1120 起内联索引上游原生支持） |
+| `ALTER TABLE ADD/MODIFY/**CHANGE** COLUMN`、`RENAME TABLE`、`ALTER TABLE … RENAME`、`CREATE/DROP INDEX`、`TRUNCATE` | ✅（`CHANGE`/`RENAME` 1120 起） |
+| `NOW()/YEAR()/DATEADD()/DATE_FORMAT()/LAST_INSERT_ID()` 等 60+ 函数 | ✅ |
+| **`UTC_TIMESTAMP()`**、**`FOR UPDATE`**、`information_schema.columns.EXTRA=auto_increment` | ✅（1120 起） |
+| **列长度约束**：`STRING(n)` 的 n 是真实约束，超长抛 `ConstraintViolation` | ⚠️ 行为变化：实体 `[Column(StringLength=…)]` 现在真的生效 |
+| `bool列 = 1` / `= '1'` | ✅（1120 起按 0/1 语义比较，分支已恢复内联 1/0） |
+| **复合主键 `PRIMARY KEY (a,b)`** | ❌ 上游明确报“不支持复合主键，请改用单列代理主键” |
+| `DATE_ADD(col, INTERVAL n unit)`、`CURDATE()`、三参数 `TIMESTAMPDIFF` | ❌ → 分支改写为 `DATEADD`/`DATE_FORMAT`/`WEEKDAY` 等价 |
+| `CREATE INDEX IF NOT EXISTS`、重复 `CREATE INDEX` | ❌ → 分支按“已存在”精确吞错（幂等） |
+| `DbFirst`（反向工程） | ❌ 未移植验证（本仓不用） |
 
 ## 实体变更
 
@@ -84,6 +91,19 @@ FreeSql（本仓分支）发射 → Nova 执行：
 - 其余实体：**无变更**。枚举（`DavRuleKind`）按 MySQL 语义存字符串
   （`enum('Path','Regex')` → Nova `String`），SQLite 时代是存 int；
   旧库数据不迁移（见下），新库无影响。
+
+## 1120-beta 相对 901 的上游变更（与本仓相关性）
+
+除了上面 SQL 兼容矩阵里的方言修复，还有几处会影响本仓，已实测确认：
+
+| 上游变更 | 对本仓的影响 |
+|---|---|
+| `d98c996` 统一存储与协议字段的小端字节序 | **旧库兼容性**：用 901 建的 `LocalPaths/novadb` 在新版上直接可读（实测审计清理读到 6 条旧记录）；新写入按小端 |
+| `b4614db` / `b145259` / `54e5c79` SQL 数值、日期、标识符改用固定区域性 | 修掉土耳其等区域的 `i/I`、数字格式化问题；本仓 SQL 生成与解析因此区域无关 |
+| `76f4795` 删表时清理行日志（rlog）文件 | 反复建删表不再残留 `.rlog` 文件；CodeFirst 回归更干净 |
+| `26be89d` / `742eb2b` 规范类型名 + 列长度真实约束 | 见上文「SQL 兼容矩阵」与补丁 1；实体 `StringLength` 真正生效 |
+| `11eb9b9` 新增 `net11.0` 目标框架 | 本仓仍用 `net10.0`，无影响（包同时提供 `net10.0`/`net8.0` 资产） |
+| 1024 稳定版的本地化/时序引擎/NativeAOT/GetSchemaTable | 与本仓 ORM 用量无关；`NovaDataReader.GetSchemaTable` 也可用（本仓走 FreeSql 内省，不依赖） |
 
 ## 运维差异
 
@@ -106,29 +126,16 @@ FreeSql（本仓分支）发射 → Nova 执行：
 { "Dav": { "Database": "Sqlite", "ConnectionString": "Data Source=LocalPaths/webdavsharp.db" } }
 ```
 
-## 上游缺口与建议（按严重性分级，均有最小复现）
+## 仍可向上游提的 issue
 
-### 一、硬缺口：改 SQL 也绕不过去（真正需要上游修的 issue）
+1. `DATE_ADD(col, INTERVAL n unit)` 的 MySQL 语法（现在只认 `DATEADD`）。
+2. `CURDATE()`、三参数 `TIMESTAMPDIFF`。
+3. `CREATE INDEX IF NOT EXISTS` / 重复索引幂等。
+4. 复合主键 `PRIMARY KEY (a,b)`（现在明确不支持；`DavUserRole` 已用代理主键绕开）。
 
-1. `CHANGE COLUMN` / `RENAME TABLE` —— DDL 改名迁移做不到，CodeFirst 改列/改表名直接 loud fail。
-2. `FOR UPDATE` —— 不支持，解析即报错，没有行锁语义。
-3. 三参数 `IndexOf` —— 直接抛 `NotSupportedException`。
-4. 自增列元数据 `information_schema.columns.EXTRA` 恒空 —— 拿不到 `AUTO_INCREMENT` 标记（本仓实体无自增列，暂不受影响）。
-5. `DbFirst` 反向工程 —— 内省 SQL 含 `LOCATE` 等，在 Nova 上报错，本仓分支未移植验证（本仓不用 DbFirst）。
+> 已解决（1120-beta 起）：`BIT` 布尔、`LIMIT m,n`、`库.表`、`LOCATE`、
+> `CHAR_LENGTH`、`UTC_TIMESTAMP`、`CHANGE COLUMN`、`RENAME TABLE`、
+> 内联索引、列级 `UNIQUE`、bool 0/1 隐转、系统视图单引号别名、
+> `information_schema.Extra`。
 
-### 二、行为差异：本仓已绕过，但属引擎行为缺陷（值得报）
-
-6. `CompareValues` 的 bool↔数字隐转 —— `bool列 = 1` 恒 false，非常反直觉（本仓内联 `TRUE/FALSE` 绕过）。
-7. 系统视图单引号别名 `'xxx'` —— 报 “without a row context”（本仓去掉别名绕过）。
-8. 反斜杠字面量 —— Nova 只有 `''` 转义，无 MySQL 的 `\\` 加倍（本仓已去掉加倍，否则 Windows 路径入库出错）。
-9. `LENGTH()` 按字符计（MySQL 按字节）—— 中文 `Length` 查询语义不同（本仓暂无此类查询）。
-
-### 三、建议级：语法糖/兼容性，本仓已打补丁绕过（提给上游只为少打补丁、生态更友好）
-
-10. `BIT` 类型别名（`bit(1)` → Boolean），FreeSql/主流 ORM 开箱即用。
-11. `LIMIT m,n` 逗号分页（MySQL 兼容）。
-12. 容忍 `` `库`.`表` `` / ``.`表` `` 空限定符（单库直接忽略库名）。
-13. `LOCATE()` / `CHAR_LENGTH()` 别名（已有 `INSTR()` / `LENGTH()`）。
-14. `UTC_TIMESTAMP()`（可用 `NOW()` + 客户端换算）。
-
-各条补丁位置见 [`src/FreeSql.Provider.Custom/README.md`](../src/FreeSql.Provider.Custom/README.md) 的 `NOVA:` 标记。
+各条补丁位置见 [`src/FreeSql.Provider.Custom/README.md`](../src/FreeSql.Provider.Custom/README.md) 的 `NovaDb` 标记。

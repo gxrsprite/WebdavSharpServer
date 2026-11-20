@@ -114,15 +114,14 @@ namespace FreeSql.Custom.MySql
                         sb.Append(" \r\nHAVING ").Append(_having.Substring(5));
                 }
                 sb.Append(_orderby);
-                // NovaDb：不支持 MySQL 的 `limit offset,count` 逗号形式（解析器遇到 ',' 直接报错），
-                // 改写为 `LIMIT n OFFSET m`。只要 skip 就必须带 limit（Nova 的 OFFSET 不能独立出现），
-                // 无上限时用 int32 最大值兜底。
+                // NovaDb 1.0.2026.1120 起解析层支持 MySQL 逗号分页 LIMIT m,n
+                // （上游 3951087），恢复上游 MySql 方言原样生成即可。
                 if (_limit > 0 && _skip > 0)
-                    sb.Append(" \r\nlimit ").Append(_limit).Append(" offset ").Append(_skip);
+                    sb.Append(" \r\nlimit ").Append(_skip).Append(",").Append(_limit);
                 else if (_limit > 0)
                     sb.Append(" \r\nlimit ").Append(_limit);
                 else if (_skip > 0)
-                    sb.Append(" \r\nlimit 2147483647 offset ").Append(_skip);
+                    sb.Append(" \r\nlimit ").Append(_skip).Append(",2147483647");
 
                 sbnav.Clear();
                 if (tbUnionsGt0) sb.Append(") ftb");

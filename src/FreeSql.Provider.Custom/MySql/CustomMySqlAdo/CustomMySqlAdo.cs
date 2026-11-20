@@ -32,18 +32,17 @@ namespace FreeSql.Custom.MySql
             if (mapType != null && mapType != param.GetType() && (param is IEnumerable == false))
                 param = Utils.GetDataReaderValue(mapType, param);
 
-            // NovaDb：字符串字面量只有 '' 转义，没有反斜杠转义（词法见 NovaDb SqlLexer.ReadString）。
-            // 若沿用 MySQL 的 "\\" → "\\\\" 加倍，Windows 路径（C:\data\x）入库会被写成双反斜杠。
-            // 所以本分支只做 '' 转义，不碰反斜杠。
-            // NovaDb：bool 内联为 TRUE/FALSE 关键字（Nova 词法有 True/False 关键字）。
-            // 不能沿用 MySQL 的 1/0：Nova 的 CompareValues 不做 bool↔数字强制转换，
-            // `bool列 = 1` 恒为 false（WHERE 直接查不出行，登录都过不了）。
+            // NovaDb 1.0.2026.1120 起词法支持反斜杠转义（标准序列还原、未知转义原样保留，
+            // 上游 3951087），因此恢复 MySQL 式的 "\\" → "\\\\" 加倍：否则 Windows 路径
+            // C:\new\test 里的 \n/\t 会被服务端当成控制字符还原。单引号仍用 '' 转义。
+            // bool 恢复上游 1/0：Nova 的布尔值语义已对齐 MySQL（上游 fc2b74f，
+            // bool 列按 0/1 参与比较与转换），不再需要 TRUE/FALSE 关键字。
             if (param is bool || param is bool?)
-                return (bool)param ? "TRUE" : "FALSE";
+                return (bool)param ? "1" : "0";
             else if (param is string)
-                return string.Concat("'", param.ToString().Replace("'", "''"), "'");
+                return string.Concat("'", param.ToString().Replace("\\", "\\\\").Replace("'", "''").Replace('\0', ' '), "'");
             else if (param is char)
-                return string.Concat("'", param.ToString().Replace("'", "''").Replace('\0', ' '), "'");
+                return string.Concat("'", param.ToString().Replace("\\", "\\\\").Replace("'", "''").Replace('\0', ' '), "'");
             else if (param is Enum)
                 return AddslashesTypeHandler(param.GetType(), param) ?? string.Concat("'", param.ToString().Replace("'", "''").Replace(", ", ","), "'"); //((Enum)val).ToInt64();
             else if (decimal.TryParse(string.Concat(param), out var trydec))

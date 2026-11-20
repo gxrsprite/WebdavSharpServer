@@ -107,4 +107,37 @@ public class NovaDbProviderTests : IDisposable
         Assert.Equal(1, _fsql.Delete<DavRule>().Where(r => r.Kind == DavRuleKind.Regex).ExecuteAffrows());
         Assert.Equal(0, _fsql.Select<DavRule>().Count());
     }
+
+    [Fact]
+    public void ColumnLength_IsEnforcedAsRealConstraint()
+    {
+        // Nova 1.0.2026.1120 起 STRING(n) 的长度是真实约束（上游 742eb2b，
+        // 超长抛 ConstraintViolation）。这取代了旧版“长度不持久化”的行为，
+        // 因此实体上的 [Column(StringLength=…)] 现在真的生效。
+        _fsql.CodeFirst.SyncStructure<DavUser>();
+
+        var tooLong = new DavUser { Username = new string('x', 51) }; // Username StringLength = 50
+        Assert.ThrowsAny<Exception>(() => _fsql.Insert(tooLong).ExecuteAffrows());
+
+        // 边界值必须放行
+        var exact = new DavUser { Username = new string('y', 50) };
+        Assert.Equal(1, _fsql.Insert(exact).ExecuteAffrows());
+    }
+
+    [Fact]
+    public void Ddl_ChangeColumnAndRenameTable_AreSupported()
+    {
+        // Nova 1.0.2026.1120 起支持 CHANGE COLUMN 与 RENAME TABLE（上游 2072877），
+        // FreeSql 的 CodeFirst 改名迁移（OldName）终于能在 Nova 上跑通。
+        _fsql.Ado.ExecuteNonQuery("CREATE TABLE rn_probe (id VARCHAR(36) NOT NULL PRIMARY KEY, a VARCHAR(20))");
+        _fsql.Ado.ExecuteNonQuery("ALTER TABLE rn_probe CHANGE COLUMN a b VARCHAR(40)");
+        _fsql.Ado.ExecuteNonQuery("RENAME TABLE rn_probe TO rn_probe2");
+
+        var cols = _fsql.Ado.ExecuteArray(System.Data.CommandType.Text,
+            "SELECT COLUMN_NAME FROM information_schema.columns WHERE TABLE_NAME = 'rn_probe2'");
+        var names = cols.Select(r => string.Concat(r[0])).ToList();
+        Assert.Contains("id", names);
+        Assert.Contains("b", names);
+        Assert.DoesNotContain("a", names);
+    }
 }

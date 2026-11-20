@@ -18,11 +18,11 @@ namespace FreeSql.Custom.MySql
         public CustomMySqlCodeFirst(IFreeSql orm, CommonUtils commonUtils, CommonExpression commonExpression) : base(orm, commonUtils, commonExpression) { }
 
         static object _dicCsToDbLock = new object();
-        // NovaDb：没有 BIT 类型（Unknown data type: bit），bool 用原生 BOOL。
-        // 注意 Nova 上报 bool 列为 tinyint(1)，比对时按基类型家族判等（见 NovaDbTypeEquals），
-        // 否则每次同步都会误报变更。
+        // NovaDb 1.0.2026.1120 起解析层把 BIT 映射为布尔（上游 3951087），
+        // 恢复上游 MySql 方言的 bit(1) 写法；服务端规范名上报 bool，
+        // 比对由 NovaDbTypeEquals 的 bool 家族负责。
         static Dictionary<string, CsToDb<DbType>> _dicCsToDb = new Dictionary<string, CsToDb<DbType>>() {
-                { typeof(bool).FullName, CsToDb.New(DbType.Boolean, "bool","bool NOT NULL", null, false, false) },{ typeof(bool?).FullName, CsToDb.New(DbType.Boolean, "bool","bool", null, true, null) },
+                { typeof(bool).FullName, CsToDb.New(DbType.Boolean, "bit","bit(1) NOT NULL", null, false, false) },{ typeof(bool?).FullName, CsToDb.New(DbType.Boolean, "bit","bit(1)", null, true, null) },
 
                 { typeof(sbyte).FullName, CsToDb.New(DbType.SByte, "tinyint", "tinyint(3) NOT NULL", false, false, 0) },{ typeof(sbyte?).FullName, CsToDb.New(DbType.SByte, "tinyint", "tinyint(3)", false, true, null) },
                 { typeof(short).FullName, CsToDb.New(DbType.Int16, "smallint","smallint(6) NOT NULL", false, false, 0) },{ typeof(short?).FullName, CsToDb.New(DbType.Int16, "smallint", "smallint(6)", false, true, null) },
@@ -194,17 +194,14 @@ namespace FreeSql.Custom.MySql
                         tboldname = null; //如果新表已经存在，不走改表名逻辑
 
                     //对比字段，只可以修改类型、增加字段、有限的修改字段名；保证安全不删除字段
-                    // NovaDb：information_schema.columns 可查，但没有 LOCATE() 函数，
-                    // 且 EXTRA 列恒为空（不暴露 auto_increment）。is_identity 写死 0：
-                    // 本仓实体没有自增列；真有自增列会被当成普通列比对（已知局限，见 README）。
-                    // 另：Nova 对带单引号别名（'xxx'）的系统视图查询有解析 quirk（无行上下文报错），
-                    // 这里一律不用别名——C# 侧本就按位置（a[0..5]）取值，别名纯属装饰。
+                    // NovaDb 1.0.2026.1120 起 information_schema.columns 的 EXTRA 会输出
+                    // auto_increment（上游 fc2b74f），恢复上游 MySQL 的 is_identity 判断。
                     var sql = _commonUtils.FormatSql(@"
 select
 a.COLUMN_NAME,
 a.COLUMN_TYPE,
 case when a.IS_NULLABLE = 'YES' then 1 else 0 end,
-0,
+case when a.EXTRA like '%auto_increment%' then 1 else 0 end,
 a.COLUMN_COMMENT,
 a.COLUMN_KEY
 from information_schema.columns a
@@ -457,53 +454,14 @@ where a.TABLE_SCHEMA IN ({0}) and a.TABLE_NAME IN ({1}) and a.INDEX_NAME <> 'PRI
             var affrows = 0;
             foreach (var script in scripts)
             {
-                // NovaDb：CREATE TABLE 体内不支持行内 INDEX / UNIQUE INDEX 定义
-                // （解析器遇到 UNIQUE 直接报错），剥离后用独立 CREATE INDEX 执行。
-                // 注意：PRIMARY KEY 单列行内约束保留（Nova 支持）。
-                var tablesql = script;
-                string[]? extraIndexSql = null;
-                if (tablesql.TrimStart().StartsWith("CREATE TABLE", StringComparison.OrdinalIgnoreCase))
-                    tablesql = NovaExtractInlineIndexes(tablesql, out extraIndexSql);
-                affrows += base.ExecuteDDLStatements(tablesql);
-                if (extraIndexSql != null)
-                    foreach (var idx in extraIndexSql)
-                    {
-                        // NovaDb 的 CREATE INDEX 不支持 IF NOT EXISTS：索引已存在即视为
-                        // 幂等成功（精确匹配错误文本，其他错误继续抛）。主要覆盖双实例
-                        // 同时首次启动的竞态；正常流程靠上面的元数据比对避免重复创建。
-                        try { affrows += base.ExecuteDDLStatements(idx); }
-                        catch (Exception ex) when (IsNovaAlreadyExists(ex)) { }
-                    }
+                // NovaDb 1.0.2026.1120 起 CREATE TABLE 支持内联 INDEX/UNIQUE INDEX
+                // （上游 740a9c1），不再需要剥离后转独立 CREATE INDEX。
+                // 仍保留“已存在即幂等”：独立 CREATE INDEX 没有 IF NOT EXISTS 写法
+                // （上游未支持），双实例同时首次启动会撞“索引已存在”。
+                try { affrows += base.ExecuteDDLStatements(script); }
+                catch (Exception ex) when (IsNovaAlreadyExists(ex)) { }
             }
             return affrows;
-        }
-
-        /// <summary>
-        /// NovaDb：从 MySQL 风格的 CREATE TABLE 中剥离行内索引定义，
-        /// 改写为独立的 <c>CREATE [UNIQUE] INDEX name ON table(cols)</c>。
-        /// FreeSql 生成的形状固定：<c>, \r\n  [UNIQUE ]INDEX `名`(col, …)</c>。
-        /// </summary>
-        static string NovaExtractInlineIndexes(string createTableSql, out string[]? indexSqls)
-        {
-            indexSqls = null;
-            var mTable = Regex.Match(createTableSql, @"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<t>`[^`]+`|\S+)",
-                RegexOptions.IgnoreCase);
-            if (!mTable.Success) return createTableSql;
-            var table = mTable.Groups["t"].Value.Trim('`');
-            var idx = new List<string>();
-            var pattern = new Regex(@",\s*\r?\n?\s*(?<uq>UNIQUE\s+)?INDEX\s+(?<n>`[^`]+`)\s*\((?<cols>[^)]+)\)",
-                RegexOptions.IgnoreCase);
-            var stripped = pattern.Replace(createTableSql, m =>
-            {
-                var uq = m.Groups["uq"].Success ? "UNIQUE " : "";
-                idx.Add($"CREATE {uq}INDEX {m.Groups["n"].Value} ON `{table}`({m.Groups["cols"].Value})");
-                return "";
-            });
-            if (idx.Count == 0) return createTableSql;
-            // 剥离后可能残留 "coldef,\r\n)" → 清理多余逗号，避免 Nova 解析失败。
-            stripped = Regex.Replace(stripped, @",(\s*\r?\n?\s*\))", "$1");
-            indexSqls = idx.ToArray();
-            return stripped;
         }
 
         /// <summary>
@@ -532,32 +490,52 @@ where a.TABLE_SCHEMA IN ({0}) and a.TABLE_NAME IN ({1}) and a.INDEX_NAME <> 'PRI
         }
 
         /// <summary>
-        /// NovaDb 类型判等：服务端 information_schema 上报的是归一化类型
-        /// （bool→tinyint(1)、varchar(50)→varchar(255)、enum/set→varchar(255)、
-        /// char(36)→varchar(255)、datetime(3)→datetime），与实体侧 DbType 按
-        /// “基类型家族”判等。Nova 只有 9 种原生类型，长度/精度本来也不持久化
-        /// ——判等即是正确语义，还能避免每次同步的无用 MODIFY。
+        /// NovaDb 类型判等：服务端 information_schema 上报的类型名与实体侧 DbType 按
+        /// “基类型家族 + 长度”判等。
+        /// <para>
+        /// Nova 1.0.2026.1120 起（上游 26be89d/742eb2b）改为输出**规范类型名**
+        /// 与**真实长度**：字符串列上报 <c>string(n)</c>（旧版是 <c>varchar(255)</c>），
+        /// bool 上报 <c>bool</c>（旧版 <c>tinyint(1)</c>），且列长度成为真实约束。
+        /// 因此这里对字符串家族比较长度：同长视为一致（避免每次同步空跑 MODIFY），
+        /// 长度变化视为真实变更（让改长/改型能正确迁移）。
+        /// </para>
         /// </summary>
         static bool NovaDbTypeEquals(string expectedDbType, string actualColumnType)
         {
-            static string Base(string t)
+            static (string Base, int? Length) Parse(string t)
             {
                 t = t.Trim().ToLowerInvariant();
-                var i = t.IndexOf('(');
-                if (i >= 0) t = t.Substring(0, i);
-                i = t.IndexOf(' ');
-                if (i >= 0) t = t.Substring(0, i);
-                return t;
+                int? length = null;
+                var open = t.IndexOf('(');
+                if (open >= 0)
+                {
+                    var close = t.IndexOf(')', open);
+                    if (close > open && int.TryParse(t.Substring(open + 1, close - open - 1), out var n))
+                        length = n;
+                    t = t.Substring(0, open);
+                }
+                var space = t.IndexOf(' ');
+                if (space >= 0) t = t.Substring(0, space);
+                return (t, length);
             }
-            var e = Base(expectedDbType);
-            var a = Base(actualColumnType);
+
+            var (e, eLength) = Parse(expectedDbType);
+            var (a, aLength) = Parse(actualColumnType);
             if (e == a) return true;
-            // 字符串家族：Nova 内部统一 String，上报 varchar(255)
-            if ((e == "varchar" || e == "char") && (a == "varchar" || a == "char")) return true;
-            // bool 家族：Nova 原生 BOOL，上报 tinyint(1)
-            if ((e == "bool" || e == "boolean" || e == "bit") && a == "tinyint") return true;
-            // 枚举：FreeSql 按 MySQL 生成 enum('A','B')，Nova 存为 String
-            if ((e == "enum" || e == "set") && (a == "varchar" || a == "char")) return true;
+
+            // 字符串家族：Nova 内部统一 String，上报 string(n)；
+            // 实体侧可能是 varchar/char/text/enum/set（MySQL 方言生成）。
+            static bool IsString(string s) =>
+                s is "varchar" or "char" or "string" or "text" or "longtext" or "mediumtext" or "enum" or "set";
+            if (IsString(e) && IsString(a))
+            {
+                // 双方都有明确长度时按长度比；任一方无长度（text/enum/未声明）视为不限，按家族判等。
+                if (eLength.HasValue && aLength.HasValue) return eLength == aLength;
+                return true;
+            }
+
+            // bool 家族：Nova 原生 BOOL，规范名 bool；旧版上报 tinyint(1)。
+            if ((e is "bool" or "boolean" or "bit") && (a is "bool" or "boolean" or "tinyint")) return true;
             return false;
         }
     }

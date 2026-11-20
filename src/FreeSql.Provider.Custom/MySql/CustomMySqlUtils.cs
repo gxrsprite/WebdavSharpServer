@@ -41,13 +41,10 @@ namespace FreeSql.Custom.MySql
             });
 
         public override string FormatSql(string sql, params object[] args) => sql?.FormatCustomMySql(args);
+        // NovaDb 1.0.2026.1120 起解析器已兼容 `库`.`表` 与 .`表` 两种限定
+        // （上游 3951087 "表名兼容 库.表 与 .表"），不再需要去限定符补丁。
         public override string QuoteSqlNameAdapter(params string[] name)
         {
-            // NovaDb：嵌入/单库模式不支持 `库`.`表` 两段式限定（解析器遇到 '.' 直接报错，
-            // 见 NewLife.NovaDb SqlParser）。Nova 是单数据库（一个目录就是一个库），
-            // 丢掉库名前缀是安全的；跨库查询本来也不存在。
-            if (name.Length == 2)
-                return QuoteSqlNameAdapter(name[1]);
             if (name.Length == 1)
             {
                 var nametrim = name[0].Trim();

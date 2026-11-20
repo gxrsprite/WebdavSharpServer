@@ -22,71 +22,68 @@ var fsql = new FreeSqlBuilder()
 fsql.SetDbProviderFactory(NovaClientFactory.Instance);
 ```
 
-## NovaDb 补丁清单（`NOVA:` 注释标记）
+## NovaDb 基线：1.0.2026.1120-beta1409
 
-实测基线：`NewLife.NovaDb 1.0.2026.901`，嵌入模式。探针脚本与结论见
-`docs/novadb.md`。
+实测基线从 `1.0.2026.901` 升级到 `1.0.2026.1120-beta1409`（2026-11-20 构建）。
+上游在 1024 稳定版之后、1120 beta 里集中补了一批 **MySQL 方言兼容**
+（master 上 11/20 的 40 个提交），直接消掉了本分支大部分补丁：
 
-1. **去库限定符**（`MySql/CustomMySqlUtils.cs`）：
-   Nova 解析器不支持 `` `库`.`表` `` 两段式（遇到 `.` 报错），而嵌入模式是单库，
-   `QuoteSqlNameAdapter(db, table)` 直接退化为 `` `table` ``。
-2. **分页改写**（`MySql/Curd/CustomMySqlSelect.cs`）：
-   Nova 不支持 `limit offset,count` 逗号形式，改写为 `LIMIT n OFFSET m`；
-   只有 skip 时用 `LIMIT 2147483647 OFFSET m` 兜底。
-3. **bool 映射**（`MySql/CustomMySqlCodeFirst.cs`）：`bit(1)` → `bool`
-  （Nova 无 `BIT` 类型）。Nova 上报 bool 列为 `tinyint(1)`，比对时按家族判等。
-4. **CodeFirst 内省 SQL**（同上）：`information_schema.columns` 查询去掉
-   `LOCATE()`（Nova 无此函数），`is_identity` 写死 `0`
-   （Nova 的元数据不暴露自增标记；本仓实体无自增列）；
-   内省查询一律**不用单引号别名**（Nova 对系统视图上 `'xxx'` 别名有解析 quirk，
-   会报“without a row context”；C# 侧本就按位置取值，别名无用）。
-   另 `CREATE TABLE` 体内行内 `INDEX/UNIQUE INDEX` 定义会被剥离，
-   改为独立 `CREATE [UNIQUE] INDEX` 执行（Nova 不支持表内建索引）；
-   复合主键不支持——`DavUserRole` 已改为代理主键 + 唯一索引。
-5. **类型判等归一**（同上 `NovaDbTypeEquals`）：Nova 上报归一化类型
-   （`varchar(50)→varchar(255)`、`char(36)→varchar(255)`、`enum(…)→varchar(255)`、
-   `datetime(3)→datetime`），按基类型家族判等，否则每次同步都误报变更。
-6. **字符串函数**（`MySql/CustomMySqlExpression.cs`）：含通配符的
-   `Contains/StartsWith/EndsWith` 由 `LOCATE()` 改 `INSTR()`；
-   `string.Length` 由 `CHAR_LENGTH()` 改 `LENGTH()`（Nova 的 `LENGTH` 按字符计）；
-   `IndexOf` 双参数改 `INSTR()-1`，三参数直接抛 `NotSupportedException`。
-7. **日期函数**（同上）：`AddDays/AddHours/…` 由 `date_add()` 改 `DATEADD('UNIT',n,col)`；
-   `Subtract/CompareTo` 用 `TIMESTAMPDIFF('SECOND',…)`；
-   `DayOfWeek` 用 `(WEEKDAY(x)-1)`，`Today` 用 `DATE_FORMAT` 等价实现。
-   `NOW()` 大写（Nova 函数名大小写不敏感，实测小写亦可，统一大写求稳）。
-8. **反斜杠转义**（`MySql/CustomMySqlAdo/CustomMySqlAdo.cs`）：
-   Nova 字面量只有 `''` 转义。去掉 MySQL 式的 `"\"→"\\"` 加倍，
-   否则 Windows 路径（`C:\data\x`）入库会被写成双反斜杠。
-9. **bool 内联**（同上）：bool 值内联为 `TRUE/FALSE` 关键字而非 `1/0`。
-   Nova 的 `CompareValues` 不做 bool↔数字隐转，`bool列 = 1` 恒为 false
-   （WHERE 直接查不出行——登录第一关就过不了）。
-10. **主键 NOT NULL**（`MySql/CustomMySqlCodeFirst.cs` `NovaPrimaryDbType`）：
-    Nova 建表不会像 MySQL 那样隐式收紧主键列可空性；可空主键列会导致
-    每次同步误报变更。建表时给**实体侧非空**的主键列补 `NOT NULL`
-    （可空 string 主键保持原样，否则永远收敛不了）。
-11. **空库名回填**（同上）：嵌入模式连接串常无 `Database=`，此时
-    `information_schema` 按空库名过滤永远查不到表。用 `SELECT DATABASE()`
-    （Nova 原生支持，返回目录名）回填当前库名。
-12. **建索引幂等**（同上 `ExecuteDDLStatements`）：独立 `CREATE INDEX`
-    无 `IF NOT EXISTS` 写法，“已存在”错误按幂等吞掉（精确匹配错误文本），
-    覆盖双实例同时首次启动的竞态。
-13. **归一判等优先**（同上）：`NovaDbTypeEquals` 命中即跳过整条上游
-    类型细化链，否则 `tinyint/varchar` 分支会把归一结果覆盖回“变更”。
+| 上游提交 | 能力 | 本分支变化 |
+|---|---|---|
+| 3951087 | 字符串反斜杠转义、`LIMIT m,n`、`` 库.表 ``/`` .表 ``、单引号别名、`FOR UPDATE`、**BIT 映射布尔**、`CHANGE COLUMN`/`RENAME TABLE` 语法 | 删去库限定符、分页改写、bit→bool 映射；**反斜杠加倍反过来必须恢复** |
+| fc2b74f | bool 按 0/1 比较、`CHAR_LENGTH`、`LOCATE`（含三参数）、`UTC_TIMESTAMP`、`information_schema.Extra` 输出 `auto_increment` | 删 `LOCATE→INSTR`、`CHAR_LENGTH→LENGTH`、bool 内联 `TRUE/FALSE` |
+| 2072877 | `CHANGE COLUMN`、`RENAME TABLE` 实际执行（含文件组搬迁） | CodeFirst 改名迁移可用 |
+| 740a9c1 | `CREATE TABLE` 内联 `[UNIQUE] INDEX`、复合主键明确报 NotSupported | 删内联索引剥离 |
+| e082829 | 列修饰符（`UNSIGNED/COLLATE/ON UPDATE`）、列级 `UNIQUE`、索引前缀长度 | 建表不再需要绕行 |
+| 26be89d + 742eb2b | 规范类型名（`DataTypeNames`）、**列长度成为真实约束**、元数据输出真实长度 | 类型判等改为「同家族 + 长度一致」 |
+| 76f4795 | 删表清理行日志文件 | — |
+
+> 这些能力目前只在 **1120-beta** 里；等上游发稳定版（如 1.0.2026.12xx）后
+> 把 csproj 版本换掉重跑测试即可，补丁清单不需要再变。
+
+## 当前补丁清单（`NOVA:` / `NovaDb` 注释标记）
+
+实测基线：`NewLife.NovaDb 1.0.2026.1120-beta1409`，嵌入模式。
+探针与结论见 `docs/novadb.md`。
+
+1. **类型判等（长度感知）**（`MySql/CustomMySqlCodeFirst.cs` `NovaDbTypeEquals`）：
+   Nova 上报**规范类型名**（字符串一律 `string(n)`、bool 为 `bool`），
+   实体侧是 MySQL 方言的 `varchar(n)/char(n)/bit(1)/enum(...)`。按
+   「基类型家族 + 长度」判等：同长视为一致（避免每次启动空跑 MODIFY），
+   长度变化视为真实变更（改长/改型能正确迁移）。
+2. **日期函数**（`MySql/CustomMySqlExpression.cs`）：上游仍不支持 MySQL 的
+   `DATE_ADD(col, INTERVAL n unit)` 写法、`CURDATE()`，且 `TIMESTAMPDIFF`
+   只认 `DATEADD`/自有签名。改为 `DATEADD('UNIT', n, col)`、
+   `DATE_FORMAT` 等价 `Today`、`(WEEKDAY(x)-1)` 还原 .NET `DayOfWeek`。
+3. **反斜杠字面量加倍**（`MySql/CustomMySqlAdo/CustomMySqlAdo.cs`）：
+   上游 1120 起**支持**反斜杠转义（标准序列还原），所以必须恢复 MySQL 式
+   `\` → `\\` 加倍；否则 Windows 路径 `C:\new\test` 里的 `\n/\t`
+   会被服务端当控制字符。单引号仍用 `''` 转义。
+4. **主键 NOT NULL**（`CustomMySqlCodeFirst.NovaPrimaryDbType`）：Nova 建表
+   不会像 MySQL 那样隐式收紧主键非空；可空主键会让每次同步误报变更。
+5. **空库名回填**（`CustomMySqlCodeFirst.GetComparisonDDLStatements`）：
+   嵌入模式连接串常无 `Database=`，`information_schema` 按 `TABLE_SCHEMA`
+   （= 目录名）过滤时查不到表。用 `SELECT DATABASE()` 回填当前库名。
+6. **建索引幂等**（`CustomMySqlCodeFirst.ExecuteDDLStatements`）：
+   `CREATE INDEX` 没有 `IF NOT EXISTS`（探针确认上游仍不支持），
+   “已存在”错误按精确文本吞掉，覆盖双实例同时首次启动的竞态。
 
 ## 已知局限（上游 NovaDb 侧缺口，改 SQL 也绕不过去）
 
-- `FOR UPDATE`、三参数 `IndexOf`、自增列元数据、`CHANGE COLUMN` 改名、
-  `RENAME TABLE` 改表名、`utc_timestamp()`：用到即 loud fail。
-  本仓当前查询均已规避（`DateTime.UtcNow/Now` 只在 C# 侧求值，不进 lambda）。
-- `LENGTH()` 在 Nova 按字符计、MySQL 按字节计：中文 `Length` 查询语义不同，
-  本仓暂无此类查询。
-- `information_schema` 的 `EXTRA` 恒为空：`AUTO_INCREMENT` 列会被当普通列，
-  本仓实体无自增列，不受影响。
-- `DbFirst`（反向工程）未移植验证：内省 SQL 仍是上游 MySQL 原样（含 `LOCATE`），
-  在 Nova 上调即报错；本仓不用 DbFirst，保持原样。
+- **复合主键**：上游明确报 `不支持复合主键，请改用单列代理主键`
+  （740a9c1 把含糊的语法错误换成了明确提示）。本仓 `DavUserRole`
+  保持代理主键 + 唯一索引。
+- `DATE_ADD(..., INTERVAL n unit)`、`CURDATE()`、三参数 `TIMESTAMPDIFF`
+  仍未支持（本分支改写成 `DATEADD` 等，见补丁 2）。
+- `CREATE INDEX IF NOT EXISTS` 仍未支持（见补丁 6）。
+- 自增列元数据：`information_schema.Extra` 现在会输出 `auto_increment`，
+  但本仓实体无自增列，未做验证。
+- `DbFirst`（反向工程）未移植验证：内省 SQL 仍是上游 MySQL 原样；本仓不用。
 
 ## 升级上游基线步骤
 
 1. 按本目录文件列表从上游同路径复制新版源码（不要覆盖 `*.csproj` / 本 `README.md`）。
-2. 重新应用上面 13 组补丁（均以 `NovaDb` 关键字注释标记，`grep -rn NovaDb` 即可列出）。
-3. 跑 `tests/WebdavSharp.Tests` 的 NovaDb 用例（`SyncStructure` 二次空跑 + 全实体 CRUD）。
+2. 重新应用上面 6 组补丁（均以 `NovaDb` 关键字注释标记，`grep -rn NovaDb` 即可列出）。
+3. 跑 `tests/WebdavSharp.Tests` 的 NovaDb 用例（`SyncStructure` 二次空跑 +
+   全字段 CRUD + 列长度约束 + `CHANGE COLUMN`/`RENAME TABLE`）。
+4. 用 `grep -rn "Nova" ../../docs/novadb.md` 核对兼容矩阵，更新缺口清单。

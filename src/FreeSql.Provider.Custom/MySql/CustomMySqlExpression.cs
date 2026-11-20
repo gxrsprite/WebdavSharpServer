@@ -198,8 +198,9 @@ namespace FreeSql.Custom.MySql
             var left = ExpressionLambdaToSql(exp.Expression, tsc);
             switch (exp.Member.Name)
             {
-                // NovaDb：没有 CHAR_LENGTH()，LENGTH() 即按字符计数，语义一致。
-                case "Length": return $"length({left})";
+                // NovaDb 1.0.2026.1120 起新增 CHAR_LENGTH（上游 fc2b74f，且 LENGTH 改为
+                // UTF-8 字节数），恢复上游 MySQL 方言的 char_length 语义。
+                case "Length": return $"char_length({left})";
             }
             return null;
         }
@@ -293,14 +294,14 @@ namespace FreeSql.Custom.MySql
                         var leftLike = exp.Object.NodeType == ExpressionType.MemberAccess ? left : $"({left})";
                         var args0Value = getExp(exp.Arguments[0]);
                         if (args0Value == "NULL") return $"{leftLike} IS NULL";
-                        // NovaDb：没有 LOCATE()，但有 INSTR(haystack, needle)（MySQL 参数顺序，
-                        // 返回 1-based 位置，未找到返回 0）。注意 Nova 的 LIKE 本身已是大小写
-                        // 不敏感，INSTR 同样忽略大小写，与 .NET 语义的差异与 MySQL 行为一致。
+                        // NovaDb 1.0.2026.1120 起新增 LOCATE（上游 fc2b74f），恢复上游
+                        // MySQL 方言的 locate(needle, haystack) 写法（返回 1-based 字符位置）。
+                        // EndsWith 用 char_length 计字符数（LENGTH 已改为字节数，中文会错位）。
                         if (new[] { '%', '_', '[', ']', '*' }.Any(wildcard => args0Value.Contains(wildcard)))
                         {
-                            if (exp.Method.Name == "StartsWith") return $"instr({left}, {args0Value}) = 1";
-                            if (exp.Method.Name == "EndsWith") return $"instr({left}, {args0Value}) = length({left})-length({args0Value})+1";
-                            return $"instr({left}, {args0Value}) > 0";
+                            if (exp.Method.Name == "StartsWith") return $"locate({args0Value}, {left}) = 1";
+                            if (exp.Method.Name == "EndsWith") return $"locate({args0Value}, {left}) = char_length({left})-char_length({args0Value})+1";
+                            return $"locate({args0Value}, {left}) > 0";
                         }
                         if (exp.Method.Name == "StartsWith") return $"{leftLike} LIKE {(args0Value.EndsWith("'") ? args0Value.Insert(args0Value.Length - 1, "%") : $"concat({args0Value}, '%')")}";
                         if (exp.Method.Name == "EndsWith") return $"{leftLike} LIKE {(args0Value.StartsWith("'") ? args0Value.Insert(1, "%") : $"concat('%', {args0Value})")}";
@@ -316,10 +317,11 @@ namespace FreeSql.Custom.MySql
                         return $"substr({left}, {substrArgs1}, {getExp(exp.Arguments[1])})";
                     case "IndexOf":
                         var indexOfFindStr = getExp(exp.Arguments[0]);
+                        // NovaDb 1.0.2026.1120 起 LOCATE 支持第三参数 start（1-based），
+                        // 与 .NET IndexOf 的 0-based startIndex 相差 1。
                         if (exp.Arguments.Count > 1 && exp.Arguments[1].Type.FullName == "System.Int32")
-                            throw new NotSupportedException("NovaDb 不支持含起始位置的 string.IndexOf（无三参数位置函数）");
-                        // NovaDb：INSTR(haystack, needle) 返回 1-based，-1 还原 .NET 语义。
-                        return $"(instr({left}, {indexOfFindStr})-1)";
+                            return $"(locate({indexOfFindStr}, {left}, {getExp(exp.Arguments[1])}+1)-1)";
+                        return $"(locate({indexOfFindStr}, {left})-1)";
                     case "PadLeft":
                         if (exp.Arguments.Count == 1) return $"lpad({left}, {getExp(exp.Arguments[0])})";
                         return $"lpad({left}, {getExp(exp.Arguments[0])}, {getExp(exp.Arguments[1])})";
