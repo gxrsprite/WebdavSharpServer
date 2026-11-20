@@ -83,6 +83,31 @@ FreeSql（本仓分支）发射 → Nova 执行：
 | `CREATE INDEX IF NOT EXISTS`、重复 `CREATE INDEX` | ❌ → 分支按“已存在”精确吞错（幂等） |
 | `DbFirst`（反向工程） | ❌ 未移植验证（本仓不用） |
 
+## SELECT 性能现状（1120-beta 源码核实）
+
+**没有针对 SELECT 路径的性能优化**，这是当前 NovaDb 的核心性能边界：
+
+- `SqlEngine.Select.cs` 中所有单表查询一律走 `table.GetAll(tx)`（line 42/158），
+  JOIN 也是 `GetAll` 两端（line 538/562）——**WHERE 条件是查全表后在内存里
+  `rows.Where(...)` 过滤**（line 47），不使用索引。
+- `NovaTable.GetAll()` 会遍历主键 SkipList 的**全部条目并逐行反序列化**
+  （`NovaTable.cs` line 537-563），所以查询成本 ≈ O(表行数)，与是否命中索引无关。
+- 引擎层其实**有** `NovaTable.LookupByIndex(indexName, indexKeyValues)`（line 658）
+  等索引查找 API，但 SQL 层没有调用；建了二级索引（`DavUserRole` 的唯一索引等）
+  对 SELECT 没有任何加速，只在写时维护唯一性。
+- 1024→1120 的提交里没有 SELECT 性能优化（都是方言兼容/窗口函数/类型名）；
+  上游的性能提交（`516d544` 序列化持久化、`13b4aa6`/`765fab4` Lock 优化、
+  `84e7e87` Decimal 编码）都不在 SELECT 查询路径上。
+
+**对本仓的影响与对策**：本仓是配置型数据（用户/角色/规则/挂载/服务设置），
+单表行数在几十到几百级，全表扫描的实际开销可忽略，无需改架构。若未来
+`DavAuditLog`（审计日志）增长到万行级，管理后台的分页/筛选会退化为全表
+反序列化+内存过滤，届时的选择：
+1. 保持 NovaDb，用审计保留天数（`Dav:AuditRetainDays`）控制行数上限；
+2. 审计改走单独的 SQLite/Server 模式库（本仓已保留 FreeSql 多库切换能力）；
+3. 绕开 SQL 直接用 `NovaTable.LookupByIndex` —— 需要本仓分支改造适配层，成本高，
+   仅在审计确实成为瓶颈时才考虑。
+
 ## 实体变更
 
 - `DavUserRole`：复合主键 → `Id Guid` 代理主键 +
@@ -126,12 +151,13 @@ FreeSql（本仓分支）发射 → Nova 执行：
 { "Dav": { "Database": "Sqlite", "ConnectionString": "Data Source=LocalPaths/webdavsharp.db" } }
 ```
 
-## 仍可向上游提的 issue
+## 上游明确不支持（已知边界）
 
-1. `DATE_ADD(col, INTERVAL n unit)` 的 MySQL 语法（现在只认 `DATEADD`）。
-2. `CURDATE()`、三参数 `TIMESTAMPDIFF`。
-3. `CREATE INDEX IF NOT EXISTS` / 重复索引幂等。
-4. 复合主键 `PRIMARY KEY (a,b)`（现在明确不支持；`DavUserRole` 已用代理主键绕开）。
+- **复合主键**：上游明确报「不支持复合主键，请改用单列代理主键」，`DavUserRole` 已用代理主键 + 唯一索引绕开。
+- `DATE_ADD(col, INTERVAL n unit)`：只认 `DATEADD('UNIT', n, col)`，本仓分支已改写。
+- `CURDATE()`：本仓分支用 `DATE_FORMAT(NOW(),'%Y-%m-%d')` 等价实现。
+- 三参数 `TIMESTAMPDIFF`：本仓分支未使用。
+- `CREATE INDEX IF NOT EXISTS`：建索引重复执行报「已存在」，本仓分支按错误文本幂等吞掉。
 
 > 已解决（1120-beta 起）：`BIT` 布尔、`LIMIT m,n`、`库.表`、`LOCATE`、
 > `CHAR_LENGTH`、`UTC_TIMESTAMP`、`CHANGE COLUMN`、`RENAME TABLE`、
