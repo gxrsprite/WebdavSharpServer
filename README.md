@@ -1,6 +1,6 @@
 # WebdavSharpServer
 
-基于 **.NET 10** 的跨平台文件服务：**WebDAV + FTP + SMB** 共用统一的用户、虚拟挂载与权限规则，并提供轻量 Blazor Server 管理后台。
+基于 .NET 10 的跨平台文件服务，支持 WebDAV、FTP 与 SMB，共用统一的用户、挂载与权限规则，并提供轻量 Blazor 管理后台。默认采用纯 C# 实现、无原生库依赖的 NovaDb，也可通过 FreeSql 接入其他数据库。
 
 ## 功能
 
