@@ -22,11 +22,11 @@ var fsql = new FreeSqlBuilder()
 fsql.SetDbProviderFactory(NovaClientFactory.Instance);
 ```
 
-## NovaDb 基线：1.0.2026.1120-beta1409
+## NovaDb 基线：1.0.2026.1121-beta0244
 
-实测基线从 `1.0.2026.901` 升级到 `1.0.2026.1120-beta1409`（2026-11-20 构建）。
-上游在 1024 稳定版之后、1120 beta 里集中补了一批 **MySQL 方言兼容**
-（master 上 11/20 的 40 个提交），直接消掉了本分支大部分补丁：
+实测基线从 `1.0.2026.901` 升级到 `1.0.2026.1121-beta0244`（2026-11-21 构建）。
+上游在 1024 稳定版之后集中补了 **MySQL 方言兼容**（1120-beta，master 上 11/20 的
+40 个提交），直接消掉了本分支大部分补丁：
 
 | 上游提交 | 能力 | 本分支变化 |
 |---|---|---|
@@ -37,13 +37,14 @@ fsql.SetDbProviderFactory(NovaClientFactory.Instance);
 | e082829 | 列修饰符（`UNSIGNED/COLLATE/ON UPDATE`）、列级 `UNIQUE`、索引前缀长度 | 建表不再需要绕行 |
 | 26be89d + 742eb2b | 规范类型名（`DataTypeNames`）、**列长度成为真实约束**、元数据输出真实长度 | 类型判等改为「同家族 + 长度一致」 |
 | 76f4795 | 删表清理行日志文件 | — |
+| **7b81b4d**（1121-beta0244） | **SELECT 走主键/二级索引（PK LOOKUP / PK RANGE / INDEX LOOKUP）+ LIMIT 下推**；索引文件版本升 2、旧文件自动重建 | 无补丁变动，但查询性能质变：5 万行点查 48ms → 0ms（本仓实测） |
 
-> 这些能力目前只在 **1120-beta** 里；等上游发稳定版（如 1.0.2026.12xx）后
-> 把 csproj 版本换掉重跑测试即可，补丁清单不需要再变。
+> 等上游发稳定版（如 1.0.2026.12xx）后把 csproj 版本换掉重跑测试即可，
+> 补丁清单不需要再变。
 
 ## 当前补丁清单（`NOVA:` / `NovaDb` 注释标记）
 
-实测基线：`NewLife.NovaDb 1.0.2026.1120-beta1409`，嵌入模式。
+实测基线：`NewLife.NovaDb 1.0.2026.1121-beta0244`，嵌入模式。
 探针与结论见 `docs/novadb.md`。
 
 1. **类型判等（长度感知）**（`MySql/CustomMySqlCodeFirst.cs` `NovaDbTypeEquals`）：

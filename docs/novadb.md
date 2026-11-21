@@ -3,14 +3,15 @@
 本仓默认库是
 [NewLife.NovaDb](https://github.com/NewLifeX/NewLife.NovaDb)
 （纯 C# 嵌入式/服务双模数据库，关系 + 时序 + MQ + KV 四引擎）。
-实测基线：**`NewLife.NovaDb 1.0.2026.1120-beta1409`**（2026-11-20 构建），嵌入模式。
+实测基线：**`NewLife.NovaDb 1.0.2026.1121-beta0244`**（2026-11-21 构建），嵌入模式。
 FreeSql 经本仓改写的 `CustomMySql` 方言分支接入，
 补丁清单见 [`src/FreeSql.Provider.Custom/README.md`](../src/FreeSql.Provider.Custom/README.md)。
 
-> 版本选择：1024 稳定版不含 MySQL 方言兼容修复；1120-beta 才包含 master 上
+> 版本选择：1024 稳定版不含 MySQL 方言兼容修复；1120-beta 包含 master 上
 > 11/20 那批提交（`LIMIT m,n`、`库.表`、BIT、`LOCATE/CHAR_LENGTH`、
-> `CHANGE COLUMN/RENAME TABLE`、内联索引、bool 0/1、规范类型名等），
-> 这些直接消掉了本仓大部分补丁。等上游出稳定版后换版本号重跑测试即可。
+> `CHANGE COLUMN/RENAME TABLE`、内联索引、bool 0/1、规范类型名等）；
+> **1121-beta0244 再加 `7b81b4d`：SELECT 真正走主键/二级索引 + LIMIT 下推**
+> （详见下文「SELECT 性能现状」）。等上游出稳定版后换版本号重跑测试即可。
 
 ## 为什么用 NovaDb
 
@@ -59,13 +60,15 @@ fsql.SetDbProviderFactory(NovaClientFactory.Instance);
 （仍走 `FreeSql.Provider.SqliteCore` + `Batteries_V2.Init()`，代码保留双轨）。
 生产 PG/MySQL 不变。
 
-## SQL 兼容矩阵（1120-beta 实测）
+## SQL 兼容矩阵（1121-beta0244 实测）
 
 FreeSql（本仓分支）发射 → Nova 执行：
 
 | 形状 | 结论 |
 |---|---|
 | `SELECT/WHERE/ORDER BY/GROUP BY/HAVING`、反引号/双引号标识符、`@param` 参数 | ✅ |
+| **`WHERE` 命中主键/单列二级索引走索引**（`PK LOOKUP`/`PK RANGE`/`INDEX LOOKUP`），`EXPLAIN` 输出计划 | ✅（1121 起；未命中或无索引回退 `FullScan`） |
+| **`LIMIT` 下推**（无排序/分组/聚合时只反序列化需要的行） | ✅（1121 起） |
 | `LIMIT n`、`LIMIT n OFFSET m`、**`LIMIT m,n` 逗号分页** | ✅（1120 起上游支持逗号形式，分支已恢复原样生成） |
 | `` `库`.`表` `` 与 `` .`表` `` 限定 | ✅（1120 起上游兼容，分支已删去限定符补丁） |
 | `INSERT/UPDATE/DELETE`（内联字面量）、`ON DUPLICATE KEY UPDATE`、多语句 | ✅ |
@@ -83,30 +86,35 @@ FreeSql（本仓分支）发射 → Nova 执行：
 | `CREATE INDEX IF NOT EXISTS`、重复 `CREATE INDEX` | ❌ → 分支按“已存在”精确吞错（幂等） |
 | `DbFirst`（反向工程） | ❌ 未移植验证（本仓不用） |
 
-## SELECT 性能现状（1120-beta 源码核实）
+## SELECT 性能现状（1121-beta 起：索引已生效）
 
-**没有针对 SELECT 路径的性能优化**，这是当前 NovaDb 的核心性能边界：
+**1120-beta 及之前**：SQL 层所有查询都是 `table.GetAll(tx)` 全表扫描 + 内存
+`WHERE` 过滤，二级索引只对写有意义——这就是提给上游的 issue #39。
 
-- `SqlEngine.Select.cs` 中所有单表查询一律走 `table.GetAll(tx)`（line 42/158），
-  JOIN 也是 `GetAll` 两端（line 538/562）——**WHERE 条件是查全表后在内存里
-  `rows.Where(...)` 过滤**（line 47），不使用索引。
-- `NovaTable.GetAll()` 会遍历主键 SkipList 的**全部条目并逐行反序列化**
-  （`NovaTable.cs` line 537-563），所以查询成本 ≈ O(表行数)，与是否命中索引无关。
-- 引擎层其实**有** `NovaTable.LookupByIndex(indexName, indexKeyValues)`（line 658）
-  等索引查找 API，但 SQL 层没有调用；建了二级索引（`DavUserRole` 的唯一索引等）
-  对 SELECT 没有任何加速，只在写时维护唯一性。
-- 1024→1120 的提交里没有 SELECT 性能优化（都是方言兼容/窗口函数/类型名）；
-  上游的性能提交（`516d544` 序列化持久化、`13b4aa6`/`765fab4` Lock 优化、
-  `84e7e87` Decimal 编码）都不在 SELECT 查询路径上。
+**1121-beta0244（当前基线）已修复**（上游提交 `7b81b4d`，Closes #39）：
 
-**对本仓的影响与对策**：本仓是配置型数据（用户/角色/规则/挂载/服务设置），
-单表行数在几十到几百级，全表扫描的实际开销可忽略，无需改架构。若未来
-`DavAuditLog`（审计日志）增长到万行级，管理后台的分页/筛选会退化为全表
-反序列化+内存过滤，届时的选择：
-1. 保持 NovaDb，用审计保留天数（`Dav:AuditRetainDays`）控制行数上限；
-2. 审计改走单独的 SQLite/Server 模式库（本仓已保留 FreeSql 多库切换能力）；
-3. 绕开 SQL 直接用 `NovaTable.LookupByIndex` —— 需要本仓分支改造适配层，成本高，
-   仅在审计确实成为瓶颈时才考虑。
+- 新增**访问计划推导** `SqlEngine.TableAccessPlan`：`PK LOOKUP`（主键等值/IN）、
+  `PK RANGE`（主键范围）、`INDEX LOOKUP`（单列二级索引等值/IN），其余走 `FullScan`。
+- 索引只缩小候选集，结果**始终按完整 WHERE 复核**；命中占比过高
+  （`FullScanFallbackMinRows`）时回退全表扫描，避免低选择性索引反而变慢。
+- **LIMIT 下推**：无排序/分组/聚合时只反序列化需要的行；二级索引未版本化，
+  不做提前截断。
+- 字符串索引键统一大写（与 SQL 大小写不敏感比较一致）；**索引文件版本升到 2，
+  旧文件自动重建**（旧库升级无感）。
+- `ComparableObject` 支持数值跨类型比较（修 ALTER TABLE 改列类型后索引比较异常）。
+- `EXPLAIN` 与执行共用同一计划推导，输出 `PK LOOKUP / PK RANGE / INDEX LOOKUP`。
+
+**本仓实测**（5 万行点查，2026-11-22）：
+
+| 查询 | 耗时 | EXPLAIN |
+|---|---|---|
+| `WHERE name='user49999'`（`name` 有唯一索引） | **0 ms** | `INDEX LOOKUP perf ux_name(name)` |
+| `WHERE id='049999'`（主键） | **0 ms** | `PK LOOKUP` |
+| `WHERE note='note49999'`（无索引） | 48 ms | `FullScan` |
+
+**对本仓的影响**：配置表（用户/规则/挂载等）依旧很快；审计日志的分页/筛选
+现在也能吃到索引（只要查询条件命中索引列）。仍建议用 `Dav:AuditRetainDays`
+控制行数上限，避免无索引条件的大表全扫。本仓分支的 6 组补丁不受影响。
 
 ## 实体变更
 
@@ -117,12 +125,13 @@ FreeSql（本仓分支）发射 → Nova 执行：
   （`enum('Path','Regex')` → Nova `String`），SQLite 时代是存 int；
   旧库数据不迁移（见下），新库无影响。
 
-## 1120-beta 相对 901 的上游变更（与本仓相关性）
+## 1120/1121-beta 相对 901 的上游变更（与本仓相关性）
 
 除了上面 SQL 兼容矩阵里的方言修复，还有几处会影响本仓，已实测确认：
 
 | 上游变更 | 对本仓的影响 |
 |---|---|
+| `7b81b4d` 查询走主键与二级索引 + LIMIT 下推（1121-beta0244） | **SELECT 从全表扫描变为索引查找**：5 万行点查 48ms → 0ms；索引文件版本升 2、旧文件自动重建。详见「SELECT 性能现状」 |
 | `d98c996` 统一存储与协议字段的小端字节序 | **旧库兼容性**：用 901 建的 `LocalPaths/novadb` 在新版上直接可读（实测审计清理读到 6 条旧记录）；新写入按小端 |
 | `b4614db` / `b145259` / `54e5c79` SQL 数值、日期、标识符改用固定区域性 | 修掉土耳其等区域的 `i/I`、数字格式化问题；本仓 SQL 生成与解析因此区域无关 |
 | `76f4795` 删表时清理行日志（rlog）文件 | 反复建删表不再残留 `.rlog` 文件；CodeFirst 回归更干净 |

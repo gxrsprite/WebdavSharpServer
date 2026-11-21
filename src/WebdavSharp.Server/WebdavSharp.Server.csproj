@@ -30,7 +30,8 @@
          MySQL 方言兼容提交（内联索引、列级唯一、CHANGE/RENAME、LIMIT m,n、
          库.表、BIT、LOCATE/CHAR_LENGTH/UTC_TIMESTAMP、bool 0/1、类型名规范、
          列长度真实约束）直接消掉了本仓大部分 CustomMySql 补丁，见 docs/novadb.md。 -->
-    <PackageReference Include="NewLife.NovaDb" Version="1.0.2026.1120-beta1409" />
+    <!-- NovaDb：纯托管嵌入式数据库（默认库）。基线 1.0.2026.1121-beta0244：在 1120 的 MySQL 方言兼容之上，master 的 7b81b4d 让 SELECT 真正走主键/二级索引（PK LOOKUP / PK RANGE / INDEX LOOKUP）+ LIMIT 下推，10 万行点查由 ~125ms 降到 ~0.05ms；索引文件版本升 2、旧文件自动重建。见 docs/novadb.md。 -->
+    <PackageReference Include="NewLife.NovaDb" Version="1.0.2026.1121-beta0244" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />    <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />

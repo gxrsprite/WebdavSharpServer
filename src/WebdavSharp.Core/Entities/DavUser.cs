@@ -5,8 +5,14 @@ namespace WebdavSharp.Core.Entities;
 /// <summary>
 /// 用户。借鉴 WebBlazor <c>SysUser</c>：PHC hash 存 <see cref="PasswordHash"/>、
 /// 凭据变更时递增 <see cref="AuthVersion"/> 使已颁发会话失效。
+/// <para>
+/// <c>Username</c> 上的唯一索引让每个认证请求都能走 NovaDb 的 INDEX LOOKUP
+/// （1121-beta 起 WHERE 命中单列二级索引不再全表扫描）。FreeSql 的
+/// <c>[Index]</c> 只能标在类上，故按「索引名 + 逗号分隔列名」声明。
+/// </para>
 /// </summary>
 [Table(Name = "dav_user")]
+[Index("ux_dav_user_username", nameof(Username), true)]
 public class DavUser
 {
     [Column(IsPrimary = true)]
